@@ -1,0 +1,70 @@
+---
+title: "Tracking Manager Domain: conditional field tracking"
+description: "Add a domain filter to any tracked field so that change history is only recorded when the parent record matches a specific condition."
+---
+
+The Tracking Manager Domain module (`tracking_manager_domain`) extends [Tracking Manager](/modules/tracking-manager) to support conditional tracking. Instead of logging every change to a field, you can attach a domain expression to the field. A change is recorded in the chatter only when the domain evaluates to `True` on the record at the time of the write.
+
+This is useful when the same field should be audited differently depending on the state of a record — for example, tracking a price change only when the order is in the `sale` state, or tracking a partner field only when a specific tag is present.
+
+## How it works
+
+The module adds a single field to `ir.model.fields`:
+
+| Field | Type | Description |
+|---|---|---|
+| `tracking_domain` | `Char` | An Odoo domain string. When set on a `custom_tracking` field, changes to that field are suppressed from the chatter unless the record matches the domain at commit time. |
+
+At commit time, the module overrides two internal methods:
+
+- `_mail_track` — filters out tracked field changes from the standard chatter pipeline when the record does not match the field's `tracking_domain`.
+- `_tm_post_message` — filters out one2many/many2many change messages staged by Tracking Manager when the parent record does not match `tracking_domain`.
+
+The domain is evaluated using Odoo's `filtered_domain` on the record, so any field accessible on the model can be used as a condition.
+
+## Configuring a domain on a tracked field
+
+<Steps>
+  <Step title="Enable custom tracking on the model">
+    Follow the steps in [Tracking Manager](/modules/tracking-manager) to enable `active_custom_tracking` on the model and mark the fields you want to track with `custom_tracking = True`.
+  </Step>
+  <Step title="Open the field configuration">
+    Go to **Settings → Technical → Database Structure → Fields**. Search for the field you want to conditionalise, or use the **Tracked Fields** smart button on the model form.
+  </Step>
+  <Step title="Set the tracking domain">
+    Enter a domain expression in the **Tracking Domain** field. The domain is evaluated against the parent record at the moment the change would be logged.
+  </Step>
+  <Step title="Save">
+    Save the field record. The registry cache is cleared automatically so the new domain takes effect for subsequent writes without restarting Odoo.
+  </Step>
+</Steps>
+
+<Note>
+Setting `tracking_domain` to an empty string or `[]` disables the condition, and the field behaves as a standard `custom_tracking` field — all changes are logged regardless of record state.
+</Note>
+
+## Example domain configurations
+
+Track a field only when the record is confirmed (state is `sale` or `done`):
+
+```python
+[("state", "in", ["sale", "done"])]
+```
+
+Track a price field only when the order is not yet invoiced:
+
+```python
+[("invoice_status", "!=", "invoiced")]
+```
+
+Track a partner field only when the record is assigned to a specific sales team (ID `3`):
+
+```python
+[("team_id", "=", 3)]
+```
+
+The domain can reference any stored field on the same model. Computed unstored fields are not recommended because they may not be available during the `precommit` hook.
+
+<Warning>
+The domain is evaluated on the record **after** the write has been applied, not before. If you need to suppress tracking based on the previous state of the record, this module does not support that use case. Use `auditlog` for full before/after state capture.
+</Warning>

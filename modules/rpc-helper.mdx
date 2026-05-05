@@ -1,0 +1,80 @@
+---
+title: "RPC Helper: disable external RPC calls in Odoo"
+description: "Block external RPC access to specific Odoo models or individual methods using a decorator or a per-model JSON configuration stored in ir.model."
+---
+
+The **RPC Helper** module (module name `rpc_helper`, UI name "Disable RPC") provides two complementary ways to prevent external RPC clients from calling methods on an Odoo model: a Python decorator applied in code, and a JSON configuration field on the `ir.model` record that can be changed at runtime through the Odoo UI.
+
+## Disabling RPC via the decorator
+
+Import `disable_rpc` from `odoo.addons.rpc_helper.decorator` and apply it to your model class.
+
+<CodeGroup>
+
+```python disable all methods
+from odoo.addons.rpc_helper.decorator import disable_rpc
+
+@disable_rpc()
+class MyModel(models.Model):
+    _inherit = "my.model"
+```
+
+```python disable specific methods
+from odoo.addons.rpc_helper.decorator import disable_rpc
+
+@disable_rpc("create", "write", "custom_method")
+class MyModel(models.Model):
+    _inherit = "my.model"
+```
+
+</CodeGroup>
+
+Calling `disable_rpc()` with no arguments blocks **all** RPC calls to the model. Passing method names as strings blocks only those specific methods.
+
+## Disabling RPC via `ir.model` configuration
+
+You can configure RPC restrictions through the Odoo UI without deploying code changes.
+
+<Steps>
+  <Step title="Enable developer mode">
+    Activate debug mode in Odoo settings.
+  </Step>
+  <Step title="Open the model record">
+    Go to **Technical → Database Structure → Models** and open the model you want to configure.
+  </Step>
+  <Step title="Open the RPC config tab">
+    Switch to the **RPC config** tab. You will see a JSON text field.
+  </Step>
+  <Step title="Enter the JSON configuration">
+    Enter a JSON object with a `disable` key. The value is a list of method names, or `["all"]` to block every call.
+
+    ```json disable all calls
+    {
+        "disable": ["all"]
+    }
+    ```
+
+    ```json disable specific methods
+    {
+        "disable": ["create", "write", "another_method"]
+    }
+    ```
+
+    The JSON is automatically formatted on save.
+  </Step>
+</Steps>
+
+## How the configuration is stored
+
+The `ir.model` model gains two fields from this module:
+
+| Field | Type | Description |
+|---|---|---|
+| `rpc_config` | `Serialized` (sparse) | Parsed configuration as a Python dict |
+| `rpc_config_edit` | `Text` | Human-editable JSON representation |
+
+`rpc_config` is a sparse field (from `base_sparse_field`) computed from `rpc_config_edit`. The parsed result is cached with `ormcache` keyed on the model name, so lookups at request time are fast.
+
+<Info>
+  `rpc_helper` depends on the `base_sparse_field` module. Make sure it is installed before enabling `rpc_helper`.
+</Info>

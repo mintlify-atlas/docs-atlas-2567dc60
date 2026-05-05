@@ -1,0 +1,72 @@
+---
+title: "Name Search Improved: smarter relation field search"
+description: "Enhances Odoo's many2one lookup with multi-word and word-order-tolerant matching, plus administrator-configurable additional search fields per model."
+---
+
+When a user types into a many2one field (for example, selecting a Customer on a sale order), Odoo runs a `name_search` against the target model. By default this is a single `ilike` match on `_rec_name`. `base_name_search_improved` extends this with a cascade of progressively more relaxed searches so users find records even when they type words in the wrong order or use only part of a name.
+
+## How the search cascade works
+
+The improved search only kicks in when the standard search returns fewer results than the configured limit—no overhead is added for queries that already yield enough results.
+
+When additional results are needed, three extra passes are attempted in order:
+
+1. **Regular search on each additional field** — searches the configured extra fields using the same `ilike` operator.
+2. **Ordered word search** — replaces spaces with `%` wildcards so `"john brown"` matches `"John M. Brown"`.
+3. **Unordered word search** — splits the query into individual words and requires each word to appear in at least one of the search fields, in any order. So `"brown john"` also matches `"John Brown"`.
+
+Results from each pass that are not already in the set are appended, keeping relevance ordering.
+
+<Info>
+  The improved search only applies when typing in relational fields (many2one dropdowns). The top-right search box in list views uses the standard Odoo `search()` method and is not affected.
+</Info>
+
+## Configuring additional search fields
+
+<Steps>
+  <Step title="Open the model configuration">
+    Navigate to **Settings > Technical > Database > Models** (developer mode required).
+  </Step>
+  <Step title="Select the target model">
+    Find the model whose name search you want to extend, for example `res.partner`.
+  </Step>
+  <Step title="Set Smart Search Fields">
+    In the **Smart Search Fields** (`name_search_ids`) field, add the fields you want to search in addition to `_rec_name`. For partners you might add `phone` or `city`.
+
+    <Warning>
+      Keep the number of smart search fields to four or fewer. The module will display a warning in the model form if you exceed this, as more fields increase query complexity. Also avoid translatable fields where possible.
+    </Warning>
+  </Step>
+  <Step title="Enable per-model">
+    Tick **Smart Name Search Enabled?** (`use_smart_name_search`) to activate the improved search for that model. You can also enable **Add Smart Search** to inject a `smart_search` field directly into the model's search view.
+  </Step>
+  <Step title="Optionally set a search domain">
+    Fill in **Smart Search Domain** to pre-filter candidates. The value must be a valid Python list of domain tuples, for example `[('customer_rank', '>', 0)]`.
+  </Step>
+</Steps>
+
+## Fields added to `ir.model`
+
+| Field | Type | Description |
+|---|---|---|
+| `use_smart_name_search` | Boolean | Activates the improved `name_search` for this model. |
+| `name_search_ids` | Many2many(`ir.model.fields`) | Extra fields to search. |
+| `name_search_domain` | Char | Optional domain to restrict smart search candidates. |
+| `add_smart_search` | Boolean | Adds a `smart_search` field to the model's search view. |
+
+## `smart_search` virtual field
+
+The module adds a virtual `smart_search` field (type `Char`) to every model via an `AbstractModel` extension of `base`. This field has no stored value, but its `_search` method triggers the full smart name search logic and returns matching record IDs. It lets you use the smart search directly from the search bar when `add_smart_search` is enabled on a model.
+
+## Allowed operators
+
+Smart search only activates for the `ilike` and `like` operators (defined as `ALLOWED_OPS = {"ilike", "like"}` in `models/ir_model.py`). Exact-match operators (`=`, `!=`) bypass the extended logic entirely.
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `base_name_search_improved` |
+| Version | 18.0.1.1.1 |
+| License | AGPL-3 |
+| Depends on | `base` |

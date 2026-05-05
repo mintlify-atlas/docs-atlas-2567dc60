@@ -1,0 +1,82 @@
+---
+title: "Audit Log: track every user operation in Odoo"
+description: "Log create, read, write, delete, and export operations on any Odoo model. Browse a full field-level history grouped by session, date, model, or HTTP request."
+---
+
+The Audit Log module (`auditlog`) intercepts ORM-level calls on subscribed models and records every `create`, `read`, `write`, `unlink`, and `export_data` operation performed by any user. Each log entry captures the user, the HTTP session, the HTTP request path, and — depending on the rule type — the before and after values of every changed field.
+
+## What gets logged
+
+Each log entry (`auditlog.log`) stores:
+
+- **Model** — the Odoo model the operation was performed on
+- **Method** — one of `create`, `read`, `write`, `unlink`, or `export_data`
+- **User** — the Odoo user who triggered the operation
+- **HTTP session** (`auditlog.http.session`) — the browser session ID and user
+- **HTTP request** (`auditlog.http.request`) — the request path, root URL, and user context
+- **Log lines** (`auditlog.log.line`) — one line per changed field, each containing `old_value`, `new_value`, `old_value_text`, `new_value_text`, the field technical name, and its human-readable description
+
+Two logging modes are available on each rule:
+
+- **Full log** — reads values before and after the operation, capturing computed fields that were updated as a side effect. Slower but more complete.
+- **Fast log** — records only the values explicitly passed to `create` or `write`. Faster but does not capture side-effects.
+
+## Configuring audit rules
+
+<Steps>
+  <Step title="Open the Rules list">
+    Go to **Settings → Technical → Audit → Rules**.
+  </Step>
+  <Step title="Create a new rule">
+    Click **New** and choose the model you want to audit in the **Model** field. Only one rule per model is allowed.
+  </Step>
+  <Step title="Select operations to log">
+    Enable any combination of **Log Creates**, **Log Writes**, **Log Deletes**, **Log Reads**, and **Log Exports**. Writes and deletes are enabled by default; read logging is off by default because it generates high volume.
+  </Step>
+  <Step title="Choose the log type">
+    Set **Type** to **Full log** (default) or **Fast log**. Full log captures computed-field side-effects at the cost of an extra `read` before and after each write.
+  </Step>
+  <Step title="Restrict to specific users (optional)">
+    Use the **Users** field to limit logging to a subset of users, or **Users to Exclude** to skip certain users.
+  </Step>
+  <Step title="Exclude specific fields (optional)">
+    Use **Fields to Exclude** to prevent certain fields from appearing in log lines. The system always suppresses `id`, `create_uid`, `create_date`, `write_uid`, `write_date`, and `display_name`.
+  </Step>
+  <Step title="Subscribe the rule">
+    Click **Subscribe**. The rule patches the model's ORM methods at runtime so logging begins immediately without restarting Odoo. Clicking **Unsubscribe** reverts the patches.
+  </Step>
+</Steps>
+
+<Warning>
+Enabling **Log Reads** on a high-traffic model (for example `res.partner` or `product.product`) can generate millions of log entries per day. Enable read logging selectively and pair it with the auto-vacuum action to keep the database size under control.
+</Warning>
+
+## Browsing logs
+
+Go to **Settings → Technical → Audit → Logs**. The list can be grouped by:
+
+- **Session** (`http_session_id`) — all operations from a single browser session
+- **Date** (`create_date`) — operations grouped by day or hour
+- **Model** (`model_id`) — all changes to a specific model
+- **HTTP request** (`http_request_id`) — every operation that occurred within a single HTTP request, including the request path
+
+Open any log entry to see its detail lines, which show each changed field alongside its old and new values (and human-readable display names for relational fields).
+
+## Auto-vacuum for old logs
+
+A scheduled action named **Auto-vacuum audit logs** is installed but **disabled by default**. When enabled, it deletes all `auditlog.log`, `auditlog.http.request`, and `auditlog.http.session` records older than a configurable number of days.
+
+<Note>
+The default retention period is **180 days** (6 months). To activate or adjust it, go to **Configuration → Technical → Automation → Scheduled Actions** and edit the **Auto-vacuum audit logs** entry. The action accepts two parameters: the number of days to retain, and an optional chunk size that limits how many records are deleted per model per run (useful when deleting millions of rows at once causes lock timeouts).
+</Note>
+
+## User groups
+
+Two security groups are provided:
+
+| Group | Access |
+|---|---|
+| **Auditlog User** | Read-only access to audit logs via the **View Logs** action on individual records. |
+| **Auditlog Manager** | Full access to configure audit rules in addition to reading logs. |
+
+The **View Logs** action is automatically added to the action menu of any model that has a subscribed rule, so users in the Auditlog User group can open the log history directly from a record form.

@@ -1,0 +1,60 @@
+---
+title: "Base Technical User: company-level technical accounts"
+description: "Assign a dedicated technical user per company for background tasks, with a sudo_tech() helper method that falls back gracefully when no user is set."
+---
+
+Many Odoo background processes — scheduled actions, integrations, automated workflows — need to run under a specific user identity rather than the superuser. `base_technical_user` adds a `user_tech_id` field to the `res.company` model, letting you designate one user per company as the technical account. A `sudo_tech()` helper on every model makes it straightforward to switch context to that user in code.
+
+## Model field
+
+The module adds a single field to `res.company`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_tech_id` | `Many2one` → `res.users` | The technical user for this company. Domain is restricted to users belonging to the same company. |
+
+<Note>
+  The technical user should be set to **inactive** so that it cannot be used for interactive login. Assign it only to the security groups required by the automated processes that will use it.
+</Note>
+
+## Use cases
+
+- **Scheduled actions** that must run with a defined set of access rights rather than full superuser privileges.
+- **Integration connectors** that write back data on behalf of a company without exposing an admin account.
+- **Audit trail**: records created or modified by the technical user are attributed to a named, identifiable account rather than an anonymous sudo context.
+
+## Configuration
+
+<Steps>
+  <Step title="Install the module">
+    Install `base_technical_user` from the Apps menu or via the command line. It depends only on the `base` module.
+  </Step>
+  <Step title="Create the technical user">
+    Go to **Settings → Users** and create (or designate) a user to act as the technical account. Set the user as inactive to prevent interactive login and assign the appropriate groups for your automated processes.
+  </Step>
+  <Step title="Assign the user to the company">
+    Open **Settings → Companies**, select the company, and navigate to the **Technical User** tab. Set the `Technical User` field to the user you created.
+  </Step>
+</Steps>
+
+## Using `sudo_tech()` in code
+
+The module extends `odoo.models.BaseModel` with a `sudo_tech()` method available on every recordset:
+
+```python
+# Switch to the company's technical user (falls back to sudo if not configured)
+self_tech = self.sudo_tech()
+
+# Raise a UserError if no technical user is configured
+self_tech = self.sudo_tech(raise_if_missing=True)
+```
+
+The method returns a new recordset in the context of the technical user when one is configured. If no technical user is set and `raise_if_missing` is `False` (the default), the original `self` is returned unchanged — **not** a sudo recordset. Pass `raise_if_missing=True` in code that must never silently fall back to unrestricted access.
+
+<Info>
+  When the technical user belongs to a different set of allowed companies than the current context, `sudo_tech()` adjusts `allowed_company_ids` in the context automatically so that multi-company rules are applied consistently.
+</Info>
+
+<Warning>
+  Because the fallback when no technical user is configured returns the unmodified `self` (not `self.sudo()`), calling `sudo_tech()` does **not** implicitly grant elevated privileges. You must configure the technical user, or handle the fallback explicitly in your code.
+</Warning>

@@ -1,0 +1,67 @@
+---
+title: "Disable attachment content indexing in Odoo"
+description: "Stop Odoo from storing extracted text from attachments in the database, reducing database size and improving write performance on large file volumes."
+---
+
+The `attachment_unindex_content` module disables the full-text content indexing of `ir.attachment` records. By default, Odoo reads the content of every uploaded file, extracts its text, and stores that text in the `index_content` column of the `ir_attachment` table. This module prevents that extraction from ever running and clears any data already stored in that column.
+
+## Why disable indexing
+
+Odoo's `index_content` field exists to support full-text search across attachment contents. In practice, most deployments do not use this feature, and it has two measurable costs:
+
+- **Duplicated data.** The file binary is stored in the filestore on disk. The extracted text is stored again in the database. For plain-text files the duplication is near-total; for PDFs and Office documents it is partial but still significant at scale.
+- **Processing overhead.** Every attachment write triggers a content extraction pass, which requires reading the file, parsing its format, and writing the result to the database. For high-volume environments, this adds latency to every file upload.
+
+Uninstalling modules like `document` does not solve this — plain-text indexing is active in Odoo even without `document` installed, at the `ir.attachment` base level.
+
+## What the module does
+
+The implementation is minimal and targeted. It overrides a single method on `ir.attachment`:
+
+```python
+class IrAttachment(models.Model):
+    _inherit = "ir.attachment"
+
+    @api.model
+    def _index(self, *args, **kwargs):
+        return False
+```
+
+By returning `False` unconditionally, `_index()` prevents any content from being written to `index_content` for new or updated attachments. No other behavior is changed.
+
+### Post-install hook
+
+At install time, a `post_init_hook` runs a single SQL statement to clear any indexed content already stored in the database:
+
+```python
+def post_init_hook(env):
+    """Clear the indexed data for records already in database"""
+    env.cr.execute("UPDATE ir_attachment SET index_content=NULL")
+```
+
+This ensures that both historical and future records have no indexed content.
+
+<Warning>
+  After installing this module, existing full-text search functionality over attachment contents will stop working. If any part of your application relies on searching the `index_content` field, test thoroughly before installing in production.
+</Warning>
+
+## Installation
+
+<Steps>
+  <Step title="Install the module">
+    Install `attachment_unindex_content` through the Odoo Apps interface or via the command line. The `post_init_hook` runs automatically on first install and clears any existing `index_content` data.
+  </Step>
+  <Step title="Verify the change">
+    After installation, upload a new text file. Query the `ir_attachment` table and confirm that `index_content` is `NULL` for the new record. Existing records will also have been cleared.
+  </Step>
+</Steps>
+
+<Info>
+  This module depends only on `base` and has no Python dependencies beyond Odoo itself. It is safe to install on any Odoo 18 instance.
+</Info>
+
+## Performance considerations
+
+The benefit of disabling indexing scales with attachment volume. Deployments that process large numbers of files — for example through EDI pipelines, document management, or email attachments — will see the most improvement in write latency and in database growth rate. For deployments with few attachments, the practical impact is small.
+
+If you later decide you need full-text search over attachment contents, uninstalling the module will re-enable the `_index()` method, but historical `index_content` data that was cleared by the post-install hook will not be restored automatically.

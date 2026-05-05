@@ -1,0 +1,120 @@
+---
+title: "Base Exception: custom validation rules for Odoo"
+description: "Define configurable exception rules via Python code, domain, or method on any Odoo model. Blocks document flow until each exception is reviewed or ignored."
+---
+
+The `base_exception` module provides two abstract Odoo models—`base.exception` and `base.exception.method`—that together give any model a configurable exception rule engine. Exception rules can block or warn when specific business conditions are detected, and users can choose to acknowledge non-blocking exceptions to proceed. The module is not useful on its own; it is a foundation for modules like `sale_exception` (sale-workflow repository) and `purchase_exception` (purchase-workflow repository).
+
+## How the exception flow works
+
+When a record is validated (e.g., a sale order is confirmed), the inheriting module calls `_check_exception()`. This triggers `detect_exceptions()`, which:
+
+1. Loads all active `exception.rule` records whose `model` field matches the current model.
+2. Evaluates each rule against the record set using one of three strategies: Python code, an Odoo domain, or a named method.
+3. Writes the matched rule IDs into the record's `exception_ids` Many2many field.
+4. If any matched rule has `is_blocking = True`, a `ValidationError` is raised and the user cannot proceed.
+5. For non-blocking exceptions, a popup is shown (via `_popup_exceptions`) where users can review the listed exceptions and choose to ignore them by calling `action_ignore_exceptions()`.
+
+Once `ignore_exception` is set to `True` on the record, all non-blocking exceptions are skipped on subsequent checks.
+
+## Models
+
+### `base.exception` (abstract)
+
+Inherit from this model to add exception tracking to your model.
+
+| Field | Type | Description |
+|---|---|---|
+| `main_exception_id` | `Many2one` → `exception.rule` | The first active exception on the record (computed, stored). Used for ordering. |
+| `exception_ids` | `Many2many` → `exception.rule` | All exception rules currently triggered on this record. |
+| `exceptions_summary` | `Html` | A computed HTML summary (`<ul>`) of all active exceptions with names, descriptions, and blocking status. |
+| `ignore_exception` | `Boolean` | When `True`, non-blocking exceptions are ignored and `main_exception_id` is cleared. |
+
+Key methods:
+
+- `action_ignore_exceptions()` — Sets `ignore_exception = True`. Raises `UserError` if any triggered rule has `is_blocking = True`.
+- `_check_exception()` — Runs `detect_exceptions()` and raises `ValidationError` if blocking exceptions are found. Skip with `context.get('check_exception', True) = False`. Suppress the raise (but still update fields) with `context.get('raise_exception', True) = False`.
+- `_popup_exceptions()` — Returns the action for the exception confirmation wizard.
+
+### `exception.rule`
+
+Stores the rule definitions managed through the Odoo UI.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `Char` | Human-readable name for the exception, displayed in validation messages. Required, translatable. |
+| `description` | `Text` | Optional longer description shown in the exceptions summary. Translatable. |
+| `sequence` | `Integer` | Ordering weight. Lower values are evaluated first. |
+| `model` | `Selection` | The Odoo model this rule applies to (e.g. `sale.order`). Required. Populated by extending modules. |
+| `exception_type` | `Selection` | Detection strategy: `by_py_code`, `by_domain`, or `by_method`. |
+| `code` | `Text` | Python code evaluated when `exception_type = by_py_code`. Set `failed = True` to trigger the exception. |
+| `domain` | `Char` | Odoo domain string evaluated when `exception_type = by_domain`. |
+| `method` | `Selection` | Method name called when `exception_type = by_method`. Populated by extending modules. |
+| `active` | `Boolean` | Inactive rules are ignored during evaluation. |
+| `is_blocking` | `Boolean` | When `True`, the exception cannot be ignored by the user. |
+
+<Note>
+  Rule evaluation results are cached at the registry level via `@tools.ormcache_context`. Creating, writing, or deleting an `exception.rule` record clears the cache automatically.
+</Note>
+
+## Extending for a custom model
+
+Below is an example of adding exception support to a custom `purchase.order` model:
+
+```python
+from odoo import api, models
+
+class PurchaseOrder(models.Model):
+    _name = "purchase.order"
+    _inherit = ["purchase.order", "base.exception"]
+
+    @api.constrains("ignore_exception", "order_line")
+    def purchase_check_exception(self):
+        orders = self.filtered(lambda o: o.state == "purchase")
+        if orders:
+            orders._check_exception()
+
+    def button_approve(self, force=False):
+        # Detect and surface exceptions before approving
+        self._check_exception()
+        return super().button_approve(force=force)
+```
+
+To register the model so rules can target it, extend `exception.rule.model` in a `Selection` field extension:
+
+```python
+from odoo import fields, models
+
+class ExceptionRule(models.Model):
+    _inherit = "exception.rule"
+
+    model = fields.Selection(
+        selection_add=[("purchase.order", "Purchase Order")],
+        ondelete={"purchase.order": "cascade"},
+    )
+```
+
+### Writing a Python code rule
+
+In the `code` field of an `exception.rule` with `exception_type = by_py_code`, you have access to `self`, `object`, and `obj` (all pointing to the current record). Set `failed = True` to mark the record as matching the exception:
+
+```python
+if object.amount_total > 10000 and not object.approved_by_manager:
+    failed = True
+```
+
+### Evaluation context
+
+The evaluation context provided to Python code rules is:
+
+```python
+{
+    "self": rec,    # the current record
+    "object": rec,  # alias for self
+    "obj": rec,     # alias for self
+}
+```
+
+<Warning>
+  Python code rules are executed with `safe_eval`. Arbitrary imports and OS-level calls are not available inside rule code.
+</Warning>

@@ -1,0 +1,81 @@
+---
+title: "Customize auto-installable modules in Odoo"
+description: "Override Odoo's built-in auto-install flags to prevent unwanted modules from being installed automatically, or force-install your own modules on every database."
+---
+
+Odoo marks certain modules as auto-installable via the `auto_install` key in their manifest. While this is useful for "glue" modules like `sale_stock`, Odoo SA also sets the flag on modules it wants to promote — such as `iap`, `partner_autocomplete`, and `account_edi` — even when there is no technical requirement for them to be installed. The `module_change_auto_install` addon lets administrators override these flags through server configuration, without patching any source files.
+
+<Note>
+This module works as a server-wide patch. You do **not** install it through the Odoo UI. Place it on your addons path and reference it in your configuration file or environment.
+</Note>
+
+## How it works
+
+The module uses Odoo's `post_load` hook to apply a patch at server start-up. For each module listed in `modules_auto_install_disabled`, the patch sets `auto_install = False`. For each entry in `modules_auto_install_enabled`, it sets `auto_install` to the specified dependency list (or `True` for unconditional installation). Changes are logged at the `INFO` level so you can verify the patch applied correctly.
+
+## Setup
+
+<Steps>
+  <Step title="Add the module to your addons path">
+    Clone or copy `module_change_auto_install` to a directory on your Odoo `addons_path`.
+  </Step>
+  <Step title="Register it as a server-wide module">
+    Edit `odoo.cfg` and add the module to `server_wide_modules`:
+
+    ```ini
+    server_wide_modules = web,module_change_auto_install
+    ```
+  </Step>
+  <Step title="Declare modules to disable or enable">
+    Add the relevant entries to `odoo.cfg`. Both keys are optional.
+
+    ```ini
+    modules_auto_install_disabled =
+        partner_autocomplete,
+        iap,
+        mail_bot
+
+    modules_auto_install_enabled =
+        web_responsive:web,
+        base_technical_features,
+        disable_odoo_online,
+        account_usability
+    ```
+  </Step>
+  <Step title="Start the server and verify">
+    Restart Odoo and check the logs. Each altered module produces a line like:
+
+    ```
+    INFO db_name odoo.addons.module_change_auto_install.patch: Module 'iap' has been marked as NOT auto installable.
+    INFO db_name odoo.addons.module_change_auto_install.patch: Module 'mail_bot' has been marked as NOT auto installable.
+    ```
+  </Step>
+</Steps>
+
+## Environment variables
+
+If you prefer not to use the config file, the same settings can be passed through environment variables. Configuration file values take precedence over environment variables when both are present.
+
+```shell
+export ODOO_MODULES_AUTO_INSTALL_DISABLED=partner_autocomplete,iap,mail_bot
+export ODOO_MODULES_AUTO_INSTALL_ENABLED=web_responsive:web,base_technical_features,disable_odoo_online,account_usability
+```
+
+## `modules_auto_install_enabled` syntax
+
+The enabled list supports an optional colon-separated dependency override:
+
+| Entry | Behaviour |
+|---|---|
+| `account_usability` | Installed when all default manifest dependencies are met. |
+| `web_responsive:web` | Installed as soon as `web` is installed, ignoring other declared dependencies. |
+| `base_technical_features:` | Installed unconditionally (no dependencies required). |
+| `point_of_sale:sale/purchase` | Installed when both `sale` and `purchase` are installed. |
+
+<Info>
+This syntax is useful for hosting companies that manage many Odoo instances and want a consistent baseline set of modules installed on every new database.
+</Info>
+
+## Use during major version upgrades
+
+When upgrading an Odoo instance using [OpenUpgrade](https://github.com/OCA/OpenUpgrade), you can load `module_change_auto_install` during the migration process to prevent newly auto-installable modules introduced in the target version from being installed automatically where they are not wanted.

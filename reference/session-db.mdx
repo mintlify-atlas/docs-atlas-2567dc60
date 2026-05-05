@@ -1,0 +1,76 @@
+---
+title: "Session DB: store Odoo sessions in PostgreSQL"
+description: "Replace Odoo's filesystem session store with a PostgreSQL-backed store, enabling stateless web nodes and horizontal scaling without a shared filesystem."
+---
+
+By default, Odoo stores HTTP session data in files on the local filesystem. This creates a problem when you run multiple Odoo web nodes behind a load balancer: a user whose request lands on a different server than the one that created their session will be logged out. The `session_db` module solves this by storing all session data in a dedicated PostgreSQL database, making every web node share the same session state.
+
+## How it works
+
+At startup the module monkey-patches `odoo.http.root`'s `session_store` lazy property. If the `SESSION_DB_URI` environment variable is set, requests go to a `PGSessionStore` instance instead of the built-in `FilesystemSessionStore`. Sessions are persisted in an `http_sessions` table with three columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `sid` | `varchar` (primary key) | Unique session identifier |
+| `write_date` | `timestamp without time zone` | Last modification time (UTC) |
+| `payload` | `text` | JSON-serialised session data |
+
+The store handles reconnection automatically — it retries a failed operation up to five times before raising an error — and supports both threaded (`threading.RLock`) and gevent (`gevent.lock.RLock`) Odoo configurations.
+
+## Use cases
+
+- **Horizontal scaling**: add or remove Odoo web nodes without session disruption.
+- **Zero-downtime deploys**: restart individual nodes while users remain logged in.
+- **Simplified infrastructure**: no NFS, GlusterFS, or other distributed filesystem required just for sessions.
+
+## Installation
+
+The module must be loaded server-wide.
+
+<Steps>
+  <Step title="Add the module to your addons path">
+    Place `session_db` in your Odoo addons directory.
+  </Step>
+  <Step title="Load it as a server-wide module">
+    Add it to `server_wide_modules` in `/etc/odoo.conf`:
+
+    ```ini odoo.conf
+    server_wide_modules = base,web,session_db
+    ```
+
+    Or pass it on the command line:
+
+    ```bash
+    odoo --load=web,session_db
+    ```
+  </Step>
+  <Step title="Set the SESSION_DB_URI environment variable">
+    Provide a full PostgreSQL connection string:
+
+    ```bash
+    export SESSION_DB_URI=postgres://user:passwd@db-host/sessions_db
+    ```
+
+    Or use a database name alone if the server is local and uses peer authentication:
+
+    ```bash
+    export SESSION_DB_URI=sessions_db
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The `http_sessions` table is created automatically on first use. You do not need to run any migrations or DDL scripts.
+</Note>
+
+<Tip>
+  Use a **dedicated database** for sessions, separate from your Odoo databases. You can also create a dedicated PostgreSQL user with access only to that database for additional security isolation.
+</Tip>
+
+## Session cleanup
+
+Expired sessions are pruned by the `vacuum` method, which deletes rows where `write_date` is older than `SESSION_LIFETIME` (the standard Odoo constant). This is called by Odoo's existing session garbage-collection mechanism, so no additional cron setup is required.
+
+<Warning>
+  If `SESSION_DB_URI` is not set, the module loads successfully but falls back to the standard filesystem session store. Verify the environment variable is visible to the Odoo process (not just the shell) when running under a service manager such as systemd.
+</Warning>

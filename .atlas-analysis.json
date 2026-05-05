@@ -1,24 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "OCA Server Tools",
+  "projectType": "framework",
+  "projectName": "OCA Server Tools",
+  "projectDescription": "A collection of Odoo addons that give administrators and developers tools to improve database management, auditing, module lifecycle, and system reliability.",
   "theme": "maple",
-  "colors": {
-    "primary": "#c37785",
-    "light": "#171c45",
-    "dark": "#737bb0"
-  },
-  "favicon": "https://media.brand.dev/c913fe6e-bc38-46d5-b183-5efe287678d7.jpg",
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/OCA/server-tools"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/OCA/server-tools"
-    }
-  },
+  "primaryColor": "#c37785",
+  "lightColor": "#171c45",
+  "darkColor": "#737bb0",
   "navigation": {
     "tabs": [
       {
@@ -84,7 +71,8 @@
               "modules/onchange-helper",
               "modules/rpc-helper",
               "modules/base-search-fuzzy",
-              "modules/sequence-python"
+              "modules/sequence-python",
+              "modules/upgrade-analysis"
             ]
           }
         ]
@@ -123,5 +111,33 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Automated database backup with local and remote (SFTP) storage",
+    "Audit logging for CRUD operations on any Odoo model",
+    "Database cleanup wizard to purge orphaned modules, models, fields, and tables",
+    "Sentry integration for real-time error monitoring and reporting",
+    "Comprehensive field tracking including one2many and many2many relations",
+    "Automatic module update detection and installation",
+    "JSONifier ORM extension to serialize any Odoo model to JSON",
+    "Fuzzy search using PostgreSQL trigram extension",
+    "Upgrade analysis tool for comparing Odoo instances across versions",
+    "Attachment queue for asynchronous file processing",
+    "Excel import/export framework for Odoo data",
+    "Scheduler exclusion to prevent simultaneous cron job execution"
+  ],
+  "publicApiSurface": [
+    "auditlog: AuditlogRule model (subscribe rules per model)",
+    "auto_backup: DbBackup model (configure local/SFTP backup jobs)",
+    "database_cleanup: Purge wizards for modules, models, fields, columns, tables",
+    "jsonifier: recordset.jsonify(parser) method on all ORM models",
+    "base_search_fuzzy: TrgmIndex model for trigram search configuration",
+    "base_exception: AbstractExceptionRule model for custom validation exceptions",
+    "tracking_manager: per-model field tracking configuration",
+    "upgrade_analysis: UpgradeAnalysis and UpgradeRecord models",
+    "attachment_queue: AttachmentQueue model with state machine (pending/failed/done)",
+    "module_auto_update: ir.module.module.upgrade_changed_checksum() method",
+    "sentry: Odoo config file options (sentry_dsn, sentry_enabled, sentry_*)",
+    "onchange_helper: env[model].play_onchanges(values, field_list)"
+  ]
 }

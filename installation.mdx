@@ -1,0 +1,140 @@
+---
+title: "Installing OCA Server Tools addons into Odoo"
+description: "Step-by-step guide to adding any OCA Server Tools addon to an Odoo 18.0 instance, from fetching the source to activating modules in the UI."
+---
+
+OCA Server Tools addons are standard Odoo modules distributed through the Python Package Index (PyPI) via the `odoo-addon-*` naming convention. You can install individual addons or the entire collection using `pip`, then activate them from the Odoo **Apps** menu like any other module. This guide covers every step from prerequisites through activation, plus notes on the external Python dependencies required by specific addons.
+
+## Prerequisites
+
+Before installing any addon, confirm that your environment meets the following requirements:
+
+- **Odoo 18.0** — the `18.0` branch of this repository targets Odoo 18.0 exclusively. Earlier Odoo versions are not supported by these packages.
+- **Python 3.10+** — the version bundled with a standard Odoo 18.0 installation.
+- **pip** — available inside the virtual environment (or system environment) used to run Odoo.
+- Write access to the Odoo add-ons path, or the ability to install Python packages into the environment where Odoo runs.
+
+<Note>
+  If you are running Odoo inside a Docker container, run the `pip install` commands inside the same container (or image layer) that executes Odoo, and ensure the add-ons path includes the installed packages.
+</Note>
+
+## Installation
+
+<Steps>
+  <Step title="Identify the addon you want to install">
+    Each addon in this repository maps to a PyPI package named `odoo-addon-<module_name>` with a version pin of `18.0.*`. For example:
+
+    | Addon directory | PyPI package |
+    |---|---|
+    | `auditlog` | `odoo-addon-auditlog` |
+    | `auto_backup` | `odoo-addon-auto_backup` |
+    | `sentry` | `odoo-addon-sentry` |
+    | `database_cleanup` | `odoo-addon-database_cleanup` |
+
+    You can also install every addon in the collection at once using the metapackage `odoo-addons-oca-server-tools`.
+  </Step>
+
+  <Step title="Install the package with pip">
+    Run the appropriate command inside the Python environment used by Odoo:
+
+    <CodeGroup>
+
+    ```bash Single addon
+    pip install "odoo-addon-auditlog==18.0.*"
+    ```
+
+    ```bash Multiple addons
+    pip install \
+      "odoo-addon-auditlog==18.0.*" \
+      "odoo-addon-auto_backup==18.0.*" \
+      "odoo-addon-sentry==18.0.*"
+    ```
+
+    ```bash Entire collection
+    pip install "odoo-addons-oca-server-tools==18.0.*"
+    ```
+
+    </CodeGroup>
+
+    <Note>
+      The `18.0.*` version specifier pins the major Odoo compatibility version while allowing patch releases to be resolved automatically.
+    </Note>
+  </Step>
+
+  <Step title="Add the addon path to Odoo's configuration">
+    Odoo discovers modules through `--addons-path`. When you install an `odoo-addon-*` package with pip, the module is placed inside the `odoo/addons/` namespace of the active Python environment, which Odoo includes automatically if you use the environment's `odoo` executable.
+
+    If Odoo does not pick up the module automatically, add the site-packages addon path explicitly in `odoo.conf`:
+
+    ```ini odoo.conf
+    [options]
+    addons_path = /path/to/odoo/addons,/path/to/venv/lib/python3.10/site-packages/odoo/addons
+    ```
+
+    Restart Odoo after changing `odoo.conf`.
+  </Step>
+
+  <Step title="Update the module list in Odoo">
+    After restarting, tell Odoo to scan for new modules:
+
+    1. Log in as an administrator.
+    2. Go to **Settings → Technical → Modules → Update Modules List** (enable developer mode first if this menu is not visible: **Settings → Activate the developer mode**).
+    3. Click **Update** in the dialog that appears.
+
+    Alternatively, pass `-u base` or `--update=base` on the command line when restarting Odoo to force a module list refresh.
+  </Step>
+
+  <Step title="Install the module via the Apps menu">
+    1. Navigate to the **Apps** menu in the top bar.
+    2. Remove the **Apps** filter from the search bar if present, so that all modules (including non-app addons) are shown.
+    3. Search for the module by its technical name or human-readable name (for example, `Audit Log` or `auditlog`).
+    4. Click **Install** on the module card.
+
+    Odoo installs the module along with any declared dependencies automatically.
+
+    <Warning>
+      Some addons require additional Python packages to be installed before the Odoo module can be activated. If the **Install** button triggers an error about a missing Python library, install the required package first (see [External Python dependencies](#external-python-dependencies) below) and then retry.
+    </Warning>
+  </Step>
+</Steps>
+
+## External Python dependencies
+
+Several addons declare `external_dependencies` on third-party Python packages. These are **not** installed automatically by Odoo; you must install them with `pip` before activating the corresponding module.
+
+| Addon | Required package(s) | Install command |
+|---|---|---|
+| `auto_backup` | `paramiko<4.0.0`, `pysftp`, `cryptography` | `pip install "paramiko<4.0.0" pysftp cryptography` |
+| `sentry` | `sentry_sdk>=2.0.0,<=2.22.0` | `pip install "sentry_sdk>=2.0.0,<=2.22.0"` |
+| `excel_import_export` | `openpyxl` | `pip install openpyxl` |
+| `upgrade_analysis` | `openupgradelib` | `pip install openupgradelib` |
+
+<Note>
+  The full list of external Python dependencies for the entire collection is in [`requirements.txt`](https://github.com/OCA/server-tools/blob/18.0/requirements.txt) at the root of the repository.
+</Note>
+
+## Updating modules
+
+When a new version of an addon is released, update it with pip and then run Odoo's module upgrade:
+
+<Steps>
+  <Step title="Upgrade the pip package">
+    ```bash
+    pip install --upgrade "odoo-addon-auditlog==18.0.*"
+    ```
+  </Step>
+
+  <Step title="Run Odoo with the upgrade flag">
+    Pass the technical module name to `--upgrade` (or `-u`) when starting Odoo:
+
+    ```bash
+    odoo -u auditlog -d <your_database>
+    ```
+
+    Replace `<your_database>` with the name of your Odoo database. Odoo applies any pending data migrations and view updates during startup.
+  </Step>
+</Steps>
+
+<Warning>
+  Always back up your database before upgrading modules in a production environment. The `auto_backup` addon can automate this for you.
+</Warning>

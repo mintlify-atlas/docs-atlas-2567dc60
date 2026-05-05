@@ -1,0 +1,92 @@
+---
+title: "Attachment Synchronize: sync files to remote storage"
+description: "Import and export Odoo attachments to and from remote backends such as SFTP or Amazon S3, driven by configurable synchronize tasks and the attachment queue."
+---
+
+The `attachment_synchronize` module lets you move files between Odoo and remote storage backends. It builds on `attachment_queue` for asynchronous processing and on `fs_storage` (from [OCA/storage](https://github.com/OCA/storage)) for backend connectivity. Remote targets can include SFTP servers, Amazon S3, Google Cloud Storage, or any filesystem backend supported by `fsspec`.
+
+Import and export are modelled as separate task types. Import tasks pull files from a remote location and create `attachment.queue` records in Odoo. Export tasks push pending `attachment.queue` records back out to a remote path.
+
+## Core concepts
+
+### Attachment synchronize task
+
+The `attachment.synchronize.task` model (`attachment_synchronize/models/attachment_synchronize_task.py`) is the central configuration object. Each task has a `method_type` of either `import` or `export`, and is linked to an `fs.storage` backend via `backend_id`.
+
+Key fields on the task model:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | Char | Human-readable task name |
+| `method_type` | Selection | `import` or `export` |
+| `backend_id` | Many2one (`fs.storage`) | The remote storage backend to connect to |
+| `filepath` | Char | Path on the remote backend to read from or write to |
+| `pattern` | Char | `fnmatch`-style filter applied to file names (e.g. `*.csv`) |
+| `file_type` | Selection | Determines how imported attachments are processed downstream |
+| `after_import` | Selection | Action taken on the source file: `rename`, `move`, `move_rename`, or `delete` |
+| `move_path` | Char | Destination path for move operations after import |
+| `new_name` | Char | New name template; supports Mako syntax (e.g. `${obj.name}-${obj.create_date}.csv`) |
+| `avoid_duplicated_files` | Boolean | Skip files already present as `attachment.queue` records with the same name |
+| `failure_emails` | Char | Email addresses notified when a queue item for this task fails |
+| `active` | Boolean | Disable the task without deleting it |
+
+### Attachment queue extension
+
+`attachment_synchronize` extends `attachment.queue` with two additional fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `task_id` | Many2one (`attachment.synchronize.task`) | Links the queue item to its originating task |
+| `fs_storage_id` | Many2one (`fs.storage`) | Resolved from the task's backend; used during export |
+
+It also adds the `export` value to the `file_type` selection. When a queue item has `file_type = "export"`, `_run()` opens a write stream on the remote backend and uploads the attachment's binary data.
+
+### Backend view
+
+The `fs.storage` model is extended with `import_task_count` and `export_task_count` computed fields, so you can see how many tasks are linked to a backend directly from its form view.
+
+## Setting up an import task
+
+<Steps>
+  <Step title="Configure a storage backend">
+    Go to **Settings > Technical > Storage > FS Storages** and create or select a backend. Configure the protocol (SFTP, S3, etc.) using the backend type's own settings.
+  </Step>
+  <Step title="Create an import task">
+    Go to **Settings > Technical > Attachments Import Tasks** and create a new task. Set `method_type` to **Import Task**, select your backend, and provide the `filepath` and optional `pattern`.
+  </Step>
+  <Step title="Choose a post-import action">
+    Set `after_import` to control what happens to the source file on the remote backend after it is pulled into Odoo. Use `delete` to remove it, or `move` / `rename` to archive it.
+  </Step>
+  <Step title="Assign a file type">
+    Set the `file_type` field if you have a downstream module that should process the imported files. Leave it empty to simply store them as attachments.
+  </Step>
+  <Step title="Run or schedule the task">
+    Click **Run** on the task form to import immediately, or let the scheduled action (`data/cron.xml`) call `run_task_import_scheduler()` automatically.
+  </Step>
+</Steps>
+
+<Info>
+  The scheduler calls `run_task_import_scheduler()` on all active import tasks. Each file is imported in its own database cursor so that a failure on one file does not roll back progress on the others.
+</Info>
+
+## Setting up an export task
+
+<Steps>
+  <Step title="Create an export task">
+    Go to **Settings > Technical > Attachments Export Tasks** and create a task with `method_type` set to **Export Task**. Select the backend and set `filepath` to the target directory on the remote.
+  </Step>
+  <Step title="Register files for export">
+    Create `attachment.queue` records linked to this export task. Setting the task automatically sets `file_type` to `export` via the `onchange_task_id` handler.
+  </Step>
+  <Step title="Trigger export">
+    From the export task form, click the export button to enqueue background jobs for all `pending` queue items linked to this task. Each job uploads the file via `_write_file_to_remote()`.
+  </Step>
+</Steps>
+
+<Warning>
+  If a `TimeoutError` occurs during upload, the job raises a `RetryableJobError` and will be retried after 4 hours. The queue item is also set to `failed` so it is visible in the UI, but will be retried automatically if the job runner is active.
+</Warning>
+
+## Duplicate detection
+
+When `avoid_duplicated_files` is enabled on an import task, the module queries existing `attachment.queue` records for any file with the same name before importing. Files that already have a matching record are skipped. This prevents re-importing files that have already been processed.

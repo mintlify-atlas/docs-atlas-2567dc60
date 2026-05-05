@@ -1,0 +1,95 @@
+---
+title: "Auto-delete old mail messages and attachments"
+description: "Define rule-based retention policies to automatically delete obsolete mail.message and ir.attachment records, keeping your Odoo database lean over time."
+---
+
+The `autovacuum_message_attachment` module (v18.0.1.0.1) tackles the gradual accumulation of chatter messages and file attachments that, left unchecked, can significantly inflate database size and slow down queries. Instead of a single global expiry setting, it gives you a flexible rules engine: each `vacuum.rule` record targets a specific type (message or attachment), optionally scoped to particular models, message subtypes, or filename patterns, and carries its own retention period in days. A scheduled action then reads the active rules and batch-deletes any matching records older than the configured threshold.
+
+## What gets deleted
+
+<Tabs>
+  <Tab title="Mail messages">
+    Rules with `ttype = message` target `mail.message` records. The deletion domain is built from the rule's settings and always includes a date cutoff:
+
+    ```
+    date < (now - retention_time days)
+    ```
+
+    Additional filters that can be combined on a single rule:
+
+    | Rule field | Effect |
+    |---|---|
+    | **Models** | Restrict deletion to messages on specific Odoo models (matched against `mail.message.model`). Leave empty to target all models. |
+    | **Message Type** | Filter by `mail.message.message_type`: `email`, `comment`, `notification`, `user_notification`, or `all`. |
+    | **Subtypes** | Filter by one or more `mail.message.subtype` records. Can be combined with **Include messages without a subtype**. |
+    | **Include messages without a subtype** | When checked alongside selected subtypes, also deletes messages where `subtype_id` is `False`. |
+    | **Domain filter** | An Odoo domain expression applied to the related model's records, letting you scope deletion to e.g. only closed sale orders. |
+  </Tab>
+  <Tab title="Attachments">
+    Rules with `ttype = attachment` target `ir.attachment` records. The cutoff is based on `create_date`:
+
+    ```
+    create_date < (now - retention_time days)
+    ```
+
+    Additional filters available for attachment rules:
+
+    | Rule field | Effect |
+    |---|---|
+    | **Models** | Restrict to attachments whose `res_model` matches the listed models. Leave empty to cover all models. |
+    | **Filename pattern** | Case-insensitive substring match on `ir.attachment.name`. Only attachments whose filename contains this pattern will be considered. |
+    | **Include attachments without a model** | When enabled and a filename pattern is also set, also deletes attachments not linked to any record (`res_model = False`). This guard prevents accidentally deleting system-generated attachments. |
+    | **Inheriting model** | A model that uses `_inherits` to extend `ir.attachment`. When set, the rule only deletes attachments that are the backing attachment record of instances of this model. |
+  </Tab>
+</Tabs>
+
+## Configuration
+
+<Steps>
+  <Step title="Open the vacuum rules menu">
+    Navigate to **Configuration → Technical → Email → Message And Attachment Vacuum Rules**.
+  </Step>
+  <Step title="Create a rule">
+    Click **New** and fill in the required fields:
+
+    - **Name** — a human-readable label for the rule.
+    - **Type** — `Message` or `Attachment`.
+    - **Retention Time** — the number of days records are kept after their creation (or message) date. Must be greater than zero; the module enforces this with a constraint.
+    - **Active** — rules can be temporarily disabled without deletion.
+    - **Company** — defaults to the current company; useful for multi-company databases with different retention policies.
+  </Step>
+  <Step title="Add optional filters">
+    Scope the rule further using the **Models**, **Message Type**, **Subtypes**, or **Filename pattern** fields as needed. The more specific the rule, the lower the risk of unintended deletions.
+  </Step>
+  <Step title="Activate the scheduled actions">
+    Go to **Settings → Technical → Automation → Scheduled Actions** and enable the relevant actions:
+
+    - **AutoVacuum Mails and Messages** — runs `autovacuum.mixin.autovacuum(ttype='message')`.
+    - **AutoVacuum Attachments** — runs `autovacuum.mixin.autovacuum(ttype='attachment')`.
+
+    It is recommended to schedule both actions to run once a day during off-peak hours (e.g. overnight) to minimise impact on interactive users.
+  </Step>
+</Steps>
+
+<Warning>
+Deletion is permanent and batched in groups of 1,000 records per transaction. There is no built-in preview of how many records a rule will delete before it runs. Test new rules on a non-production database first, or set a generous initial retention period and reduce it incrementally.
+</Warning>
+
+## How deletion works
+
+The `AutovacuumMixin` abstract model provides the `batch_unlink()` method used by both `mail.message` and `ir.attachment`. It opens a fresh database cursor and deletes records in batches of 1,000, committing after each batch. This avoids holding a single large transaction open for the entire job, which would block other database activity and risk memory exhaustion on large datasets.
+
+```python
+# Simplified logic from autovacuum_mixin.py
+while records:
+    batch = records[0:1000]
+    records -= batch
+    batch.with_env(new_env).unlink()
+    new_env.cr.commit()
+```
+
+Each run of the scheduled action iterates over all active rules of the requested type, computes the deletion domain for each rule, fetches the matching records, and calls `batch_unlink()`.
+
+<Tip>
+For message rules that target a specific model (e.g. only chatter notes on closed projects), use the **Domain filter** field with a domain expression like `[('state', '=', 'done')]` to avoid deleting messages on active records. The `datetime` object is available in the domain's evaluation context.
+</Tip>

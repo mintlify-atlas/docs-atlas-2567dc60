@@ -1,0 +1,110 @@
+---
+title: "Upgrade Analysis: compare Odoo instances for migration"
+description: "Generate field, model, and XML record difference files between two Odoo instances to guide OpenUpgrade migration script development across major versions."
+---
+
+The `upgrade_analysis` addon generates structured difference files that describe how Odoo's data model and XML records have changed between two versions. These files feed directly into [OpenUpgrade](https://github.com/OCA/OpenUpgrade) migration scripts, telling developers which fields were added, removed, or modified in each module. Analysis files for Odoo core modules are bundled with OpenUpgrade, so most users only need this tool when analysing a custom set of modules.
+
+<Warning>
+This module is a development tool. Do not install it on a production database. It connects to remote Odoo instances using `odoorpc` and writes analysis files to disk during the analysis process.
+</Warning>
+
+## Prerequisites
+
+Install the required Python packages before enabling the addon:
+
+```bash
+pip install odoorpc openupgradelib
+```
+
+The `dataclasses` module is also listed as a dependency but is included in the Python standard library since Python 3.7.
+
+## Workflow
+
+<Steps>
+  <Step title="Install the module on your target instance">
+    Install `upgrade_analysis` on the Odoo instance you are migrating **to** (the newer version). This is your local instance.
+  </Step>
+  <Step title="Create a comparison configuration">
+    Navigate to **Upgrade → Comparison Configurations** and create an `UpgradeComparisonConfig` record with the connection details for your source instance (the older version):
+
+    | Field | Description |
+    |---|---|
+    | `name` | A label for this configuration. |
+    | `server` | Hostname or IP of the remote Odoo server (default: `localhost`). |
+    | `port` | RPC port of the remote server (default: `8069`). |
+    | `database` | Database name on the remote server. |
+    | `username` | Login user on the remote server (default: `admin`). |
+    | `password` | Password for the remote user. |
+
+    Use **Test Connection** to verify connectivity. On success, the detected remote version is stored in the `version` field.
+  </Step>
+  <Step title="Generate upgrade records on both instances">
+    Run the **Generate Upgrade Records** wizard on each instance. This populates the `upgrade.record` model with a snapshot of every field, XML ID, and model on that instance.
+  </Step>
+  <Step title="Create and run an analysis">
+    From the comparison configuration, click **New Analysis**. This creates an `UpgradeAnalysis` record linked to the config. Open it and click **Analyse** to call `UpgradeAnalysis.analyze()`.
+
+    The method connects to the remote instance via `odoorpc`, fetches the remote `upgrade.record` data, compares it against the local records, and writes `upgrade_analysis.txt` files per module to the configured upgrade path.
+  </Step>
+  <Step title="Review the output">
+    The `log` field on the `UpgradeAnalysis` record contains a consolidated general log. Per-module analysis files are written to `<upgrade_path>/<module>/<version>/upgrade_analysis.txt` for Odoo core modules, and to `<module_path>/migrations/<version>/upgrade_analysis.txt` for custom modules.
+  </Step>
+</Steps>
+
+## Models
+
+### `UpgradeComparisonConfig` (`upgrade.comparison.config`)
+
+Stores the connection parameters for the remote (source) Odoo instance. The `get_connection()` method returns a live `odoorpc.ODOO` connection object used throughout the analysis run.
+
+```python
+def get_connection(self):
+    """Return an authenticated odoorpc connection to the remote instance."""
+    remote = odoorpc.ODOO(self.server, port=self.port)
+    remote.login(self.database, self.username, self.password)
+    self.version = remote.version
+    return remote
+```
+
+### `UpgradeAnalysis` (`upgrade.analysis`)
+
+Represents a single comparison run. Key fields:
+
+| Field | Description |
+|---|---|
+| `config_id` | The `UpgradeComparisonConfig` used for this run. |
+| `analysis_date` | Timestamp of the last run. |
+| `state` | `draft` until analysis completes, then `done`. |
+| `upgrade_path` | File system path where analysis files are written. Defaults to Odoo's `--upgrade-path` option or the `scripts/` subdirectory inside `openupgrade_scripts` if available. |
+| `write_files` | When `True` (default), analysis output is written to disk in addition to being stored in `log`. |
+| `log` | Consolidated text log covering all modules. |
+
+The `analyze()` method performs three separate comparisons and merges the results per module:
+
+- **Field comparison** — detects added, removed, and changed field attributes.
+- **XML ID comparison** — detects added and removed XML records.
+- **Model comparison** — detects added and removed models and model type changes.
+
+### `UpgradeRecord` (`upgrade.record`)
+
+A snapshot record representing a single field, XML ID, or model on the local instance. Key fields:
+
+| Field | Description |
+|---|---|
+| `name` | The fully-qualified XML ID or field identifier. |
+| `module` | The module that owns this record. |
+| `model` | The Odoo model name. |
+| `field` | The field name (for `type = field` records). |
+| `mode` | `create` if the field is defined in this module, `modify` if it extends another module's field. |
+| `type` | One of `field`, `xmlid`, or `model`. |
+| `noupdate` | Whether the XML record has `noupdate=True`. |
+
+The `field_dump()` method serialises all field-type records into a list of dictionaries for comparison. The `get_xml_records()` method reads and returns the raw XML content of all data files declared in a module's manifest.
+
+## External dependencies
+
+| Package | Purpose |
+|---|---|
+| `odoorpc` | RPC client used by `UpgradeComparisonConfig.get_connection()` to communicate with the remote Odoo instance. |
+| `openupgradelib` | Provides the `apriori` module with `renamed_modules` and `merged_modules` mappings used during comparison to correctly attribute changes across module renames and merges. |

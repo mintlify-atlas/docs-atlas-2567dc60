@@ -1,0 +1,61 @@
+---
+title: "Mail Template Attachments per Language in Odoo"
+description: "Define language-specific file attachments on Odoo mail templates so multilingual companies automatically send the right documents to each recipient."
+---
+
+By default, Odoo mail templates have a single fixed list of attachments that goes to every recipient regardless of their language. `mail_template_attachment_per_lang` extends mail templates so you can map one set of attachments per language. When the email is composed, Odoo picks the attachment set that matches the recipient's (or template's) language automatically.
+
+A common use case is a company operating in multiple countries: a sale order confirmation email can automatically attach the English terms and conditions for English-speaking customers and the French version for French-speaking customers—without requiring separate templates.
+
+## How language resolution works
+
+The template's language expression determines which language is used for attachment selection. This expression is the same Jinja expression used for translating the email body, for example:
+
+- `{{ object.partner_id.lang }}` — uses the recipient partner's configured language
+- `{{ object.user_id.lang }}` — uses the assigned salesperson's language
+
+When partners with multiple different languages are on the same email (To, CC, BCC), all matching attachment sets are merged and included.
+
+## Configuration
+
+<Steps>
+  <Step title="Enable developer mode">
+    Attachment settings are technical fields. Go to **Settings > General Settings** and activate developer mode.
+  </Step>
+  <Step title="Open the mail template">
+    Navigate to **Settings > Technical > Email > Templates** and open the template you want to modify.
+  </Step>
+  <Step title="Choose the Language Attachment Method">
+    In the template form view, locate the **Language Attachment Method** field and select the method that fits your use case.
+  </Step>
+  <Step title="Configure Language Dependent Attachments">
+    In the **Language Dependent Attachments** field (a one2many list), add one row per language. For each row, select a language and upload or link the attachment file(s) for that language.
+  </Step>
+</Steps>
+
+<Info>
+  The standard **Attachments** field on the template continues to work as before. Language-dependent attachments are added on top of any fixed attachments already defined on the template.
+</Info>
+
+## Using the feature when sending email
+
+Once configured, the feature is transparent to end users:
+
+1. Open a record, for example a sale order.
+2. Click **Send by Email**.
+3. The mail composer evaluates the template language and automatically includes the correct language-specific attachments.
+4. If multiple recipients with different languages are addressed, attachments for all relevant languages are included.
+
+<Tip>
+  The language used for attachments follows the same expression as the template's **Language** field. Make sure your template's language expression is set correctly—typically `{{ object.partner_id.lang }}`—before configuring per-language attachments.
+</Tip>
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `mail_template_attachment_per_lang` |
+| Version | 18.0.1.0.0 |
+| License | AGPL-3 |
+| Depends on | `mail` |
+| Category | Localization |

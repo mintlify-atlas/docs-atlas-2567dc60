@@ -1,0 +1,75 @@
+---
+title: "Mail Cleanup: auto-archive or delete old Odoo messages"
+description: "Mark old IMAP messages as read, move them to a cleanup folder, or delete them permanently based on configurable day thresholds on each incoming mail server."
+---
+
+Odoo's standard mail fetching re-parses every unread message on each poll. If junk mail or unroutable messages accumulate in your catch-all inbox, each fetch cycle processes them again before reaching new mail. `mail_cleanup` solves this by running a cleanup pass—immediately before the standard `fetch_mail`—that marks old messages as read and optionally moves or permanently deletes them directly on the IMAP server.
+
+## What it does
+
+For each configured IMAP incoming mail server the module can perform two independent operations:
+
+| Operation | Field | Description |
+|---|---|---|
+| **Mark as read** | `cleanup_days` | Marks all unseen messages older than this many days as `\Seen`. If `cleanup_folder` is also set, moves them there first, then marks as deleted. |
+| **Purge** | `purge_days` | Permanently flags messages older than this many days as `\Deleted`, regardless of read status. |
+
+After both operations, an IMAP `EXPUNGE` command is issued to permanently remove flagged messages from the server.
+
+<Warning>
+  The purge operation deletes messages from the IMAP server permanently—regardless of whether they were ever imported into Odoo. Set `purge_days` to a conservative value and test on a non-production server first.
+</Warning>
+
+## Configuration
+
+`mail_cleanup` depends on `mail_environment`, which allows server settings to be stored in an environment configuration file rather than only in the database. Add the following keys to the relevant section of your server environment file:
+
+```ini
+[incoming_mail.openerp_imap_mail1]
+cleanup_days = 30       # mark messages older than 30 days as read; False to disable
+purge_days = 90         # delete messages older than 90 days; False to disable
+cleanup_folder = NotParsed  # optional: move cleaned-up messages here
+```
+
+You can also set `cleanup_days`, `purge_days`, and `cleanup_folder` directly in the Odoo UI under **Settings > Technical > Email > Incoming Mail Servers**.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cleanup_days` | Integer | 0 (disabled) | Age in days after which unread messages are marked as read. |
+| `purge_days` | Integer | 0 (disabled) | Age in days after which messages are permanently deleted. |
+| `cleanup_folder` | Char | — | IMAP folder name to move cleaned-up messages into before deleting from inbox. |
+
+<Info>
+  Setting a field to `0` (zero) disables that operation. The cleanup logic checks `if server.cleanup_days > 0` and `if server.purge_days > 0` before running each pass.
+</Info>
+
+## Execution flow
+
+The cleanup runs synchronously inside the standard `fetch_mail` scheduled action, immediately before Odoo fetches new messages:
+
+<Steps>
+  <Step title="Connect to IMAP server">
+    A fresh IMAP connection is opened and the inbox is selected.
+  </Step>
+  <Step title="Mark old messages as read (if cleanup_days > 0)">
+    Searches for `UNSEEN BEFORE <expiration_date>`. Each matching message is flagged `\Seen`. If `cleanup_folder` is configured, the message is copied to that folder and then flagged `\Deleted` in the inbox.
+  </Step>
+  <Step title="Delete old messages (if purge_days > 0)">
+    Searches for `BEFORE <purge_date>` (any message, read or unread). Each matching message is flagged `\Deleted`.
+  </Step>
+  <Step title="Expunge">
+    Issues an IMAP `EXPUNGE` to permanently remove all `\Deleted` messages from the server.
+  </Step>
+  <Step title="Proceed with normal fetch">
+    The IMAP connection is closed and the standard `fetch_mail` logic runs on the now-cleaned inbox.
+  </Step>
+</Steps>
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `mail_cleanup` |
+| Version | 18.0.1.0.2 |
+| License | AGPL-3 |
+| Depends on | `mail_environment` |

@@ -1,0 +1,100 @@
+---
+title: "Database Auto-Backup: automated local and SFTP backups"
+description: "Automatically back up your Odoo database on a schedule to local disk or a remote SFTP server, with configurable retention, email alerts, and manual triggers."
+---
+
+The `auto_backup` module (v18.0.1.0.1) gives you complete control over database backups without leaving Odoo. You can write backups to a local folder or push them over an encrypted SSH tunnel to a remote SFTP server, keep them for a configurable number of days, and get notified by email when something goes wrong. A daily scheduled action runs automatically, but you can also trigger any backup on demand from the configuration list.
+
+## Overview
+
+Each backup configuration is an independent record on the `db.backup` model and can target a different destination, format, or retention window. Configurations are named automatically — local ones appear as `<folder> @ localhost` and remote ones as `sftp://<user>@<host>:<port><folder>` — so the list view stays readable at a glance.
+
+Two backup formats are supported:
+
+- **zip** — a full archive including the filestore (attachments). Produces a `.dump.zip` file.
+- **pg_dump** — PostgreSQL custom format without the filestore. Produces a `.dump` file.
+
+<Note>
+Local backup folders must not be inside the Odoo filestore directory. The module enforces this constraint and will raise a validation error if you try to save a configuration that points inside `data_dir/filestore/`.
+</Note>
+
+## Prerequisites
+
+The module requires three Python packages that must be installed in the server environment before the module itself is installed:
+
+```bash
+pip install "paramiko<4.0.0" pysftp cryptography
+```
+
+`pysftp` handles the SSH/SFTP transport layer. `cryptography` is a hard dependency of `paramiko`. These are declared in the manifest under `external_dependencies`.
+
+## Configuration
+
+<Steps>
+  <Step title="Open the Automated Backup menu">
+    Navigate to **Settings → Database Structure → Automated Backup**. You need to be a member of the **ERP Manager** group to create or modify configurations.
+  </Step>
+  <Step title="Create a new backup configuration">
+    Click **New** and set the storage method, folder path, backup format, and retention period for this configuration.
+  </Step>
+  <Step title="Choose a storage method and fill in the details">
+    Select **Local disk** or **Remote SFTP server** and complete the fields specific to that method (see the tabs below).
+  </Step>
+  <Step title="Save and optionally test">
+    Save the record. For SFTP configurations, click **Test SFTP Connection** to verify connectivity before relying on scheduled backups.
+  </Step>
+</Steps>
+
+## Storage methods
+
+<Tabs>
+  <Tab title="Local disk">
+    A local backup writes the dump file directly to a folder on the same server running Odoo.
+
+    | Field | Description |
+    |---|---|
+    | **Folder** | Absolute path where backup files are stored. Defaults to `<data_dir>/backups/<dbname>`. |
+    | **Days to Keep** | Backups older than this many days are deleted automatically after each run. Set to `0` to disable automatic deletion. |
+    | **Backup Format** | `zip` (includes filestore) or `pg_dump` custom format (database only). |
+
+    <Warning>
+    Do not point the folder at a path inside your Odoo filestore. If you do, each backup will contain the previous backups, causing exponential growth. The module blocks this configuration with a validation error.
+    </Warning>
+  </Tab>
+  <Tab title="Remote SFTP server">
+    An SFTP backup establishes an encrypted SSH tunnel to a remote host and writes the dump file there. The connection is handled by `pysftp`.
+
+    | Field | Description |
+    |---|---|
+    | **SFTP Server** | Hostname or IP address of the remote server (e.g. `192.168.0.1`). |
+    | **SFTP Port** | SSH port on the remote server. Defaults to `22`. |
+    | **Username** | The SSH/SFTP user on the remote server. |
+    | **SFTP Password** | Password for the user, or the passphrase to decrypt the private key file if one is specified. |
+    | **Private key location** | Absolute path to the SSH private key file on the Odoo server. Only the Odoo OS user should have read access to this file. |
+    | **Folder** | Remote path where backup files are written. Created automatically if it does not exist. |
+    | **Days to Keep** | Same as local — files older than this many days are removed from the remote server. |
+
+    After filling in the credentials, click **Test SFTP Connection** to validate them. A dialog will confirm success or describe what went wrong.
+  </Tab>
+</Tabs>
+
+## Running backups manually
+
+From the **Automated Backup** list, select one or more configurations and choose **Action → Execute backup(s)**. This runs the same code path as the scheduled action and respects the configured format and retention settings.
+
+## Scheduled execution
+
+The module installs a daily cron job (`ir.cron`) that calls `db.backup.action_backup_all()`, which runs every active backup configuration. You can inspect or adjust the schedule under **Settings → Technical → Automation → Scheduled Actions**.
+
+## Email notifications
+
+The `auto_backup` module inherits from `mail.thread`, so each backup configuration record has a chatter. Backup results are posted as messages using a dedicated message subtype:
+
+- **Success** — a plain message is posted after each successful backup.
+- **Failure** — a message with the full Python traceback is posted using the `auto_backup.mail_message_subtype_failure` subtype.
+
+To receive email alerts on failure, open a backup configuration record and subscribe to the **Failure** notification subtype via the **Follow** button.
+
+## Backup file naming
+
+Files are named by timestamp in the format `YYYY_MM_DD_HH_MM_SS.dump.zip` (for zip format) or `YYYY_MM_DD_HH_MM_SS.dump` (for pg_dump format). The timestamp-based naming is also how old-file cleanup works: the module compares filenames lexicographically against the cutoff filename for the configured retention window.

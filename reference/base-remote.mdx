@@ -1,0 +1,67 @@
+---
+title: "Base Remote: foundation for remote Odoo connections"
+description: "Track and resolve external IP addresses connecting to Odoo. Stores hostnames in res.remote and exposes a self.remote property on models for access control."
+---
+
+`base_remote` provides the infrastructure that other modules can build on when they need to know which remote host originated a request. When installed, every inbound connection's IP address is resolved to a hostname and stored in the `res.remote` model. A `remote` property is added to every Odoo model, making it easy to retrieve the current caller's remote record from anywhere in application code. The module also hooks into authentication so that the remote is registered at login time.
+
+## The `res.remote` model
+
+Connected remotes are stored in the `res.remote` model. Each record tracks:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `Char` (required, unique, indexed) | Hostname resolved via reverse DNS, or the raw IP address if resolution fails. |
+| `ip` | `Char` (required) | Last known IP address of this remote. Updated automatically if the IP changes. |
+| `in_network` | `Boolean` (required) | `True` when the hostname was successfully resolved via `socket.gethostbyaddr`. |
+
+The `name` field is used as the unique key. If the IP address for a known hostname changes over time, the record is updated in place rather than creating a duplicate.
+
+<Note>
+  Records are created on first contact and are never automatically deleted. Use the **Settings → Remotes** view to review and manage stored remotes.
+</Note>
+
+## How remotes are resolved
+
+When a request comes in, `base_remote` calls `socket.gethostbyaddr(addr)` against the remote IP. If the lookup succeeds the hostname is stored as `name` and `in_network` is set to `True`. If the lookup raises `socket.herror` (no PTR record or unreachable), the raw IP address is used as `name` and `in_network` is `False`. A warning is logged in that case.
+
+## The `remote` property
+
+Every Odoo model gains a `remote` property via inheritance from the abstract `base` model:
+
+```python
+# Inside any model method — retrieve the res.remote record for the current request
+remote = self.remote
+
+# Example: restrict an action based on the caller's network status
+if not self.remote.in_network:
+    raise AccessDenied()
+```
+
+The property reads `http.request.httprequest.remote_addr` and calls `res.remote._get_remote(addr)`. If there is no active HTTP request (e.g., in a scheduled action or RPC context without a request), it returns an empty `res.remote` recordset instead of raising an error.
+
+## Authentication integration
+
+`base_remote` overrides `res.users._login` and `res.users.authenticate` to record (or create) the remote before the credential check runs. If the remote cannot be resolved to a single record, authentication is denied. This allows other modules to extend `res.remote` with access-control logic (for example, IP allowlists) that is enforced at login time.
+
+<Warning>
+  In test mode (`config["test_enable"] = True`) the `ensure_one()` check on the remote is skipped so that tests do not need a real network address. In production this check is enforced, and a missing or ambiguous remote record causes authentication to fail.
+</Warning>
+
+## Usage
+
+<Steps>
+  <Step title="Install the module">
+    Install `base_remote` from the Apps menu. It depends on `web` and has no other requirements.
+  </Step>
+  <Step title="View connected remotes">
+    Navigate to **Settings → Remotes** to see all registered external addresses.
+  </Step>
+  <Step title="Use the remote property in dependent modules">
+    Access `self.remote` in any model method to retrieve the `res.remote` record for the current HTTP request, then apply your own business logic based on `name`, `ip`, or `in_network`.
+  </Step>
+</Steps>
+
+<Tip>
+  This module is designed as a foundation. Install it as a dependency in modules that need per-remote configuration, access control, or audit logging rather than using it for end-user features directly.
+</Tip>

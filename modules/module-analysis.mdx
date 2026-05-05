@@ -1,0 +1,100 @@
+---
+title: "Module Analysis: categorize installed Odoo modules"
+description: "Classify every installed Odoo module as Odoo Core, OCA, or custom, and measure lines of code per language to quantify your technical debt."
+---
+
+The `module_analysis` addon enriches the standard `ir.module.module` model with authorship, type classification, and line-count metrics. It lets you answer questions like "how much custom code is running in production?" or "what is the ratio of OCA modules to Odoo core modules?" — information that is useful when planning upgrades or estimating maintenance costs.
+
+<Note>
+This module requires the `pygount` Python library. Install it before enabling the addon:
+
+```bash
+pip install pygount
+```
+</Note>
+
+## Models introduced
+
+### `ir.module.author`
+
+Stores the unique author names parsed from each module's manifest `author` field. The model enforces a unique constraint on `name` and exposes a computed `installed_module_qty` field that counts how many installed modules list that author.
+
+### `ir.module.type`
+
+Represents a category such as "Odoo Core" or "OCA". Each type has a `sequence` for display ordering and a reverse relation `installed_module_ids` to all modules currently classified under it.
+
+### `ir.module.type.rule`
+
+Rules are evaluated in `sequence` order to determine which `ir.module.type` a module belongs to. Each rule holds an Odoo domain string (`module_domain`) that is applied against `ir.module.module`. The first matching rule wins.
+
+Default rules ship with the module and cover the standard Odoo and OCA author patterns. You can add custom rules to capture your own team's modules.
+
+## Fields added to `ir.module.module`
+
+| Field | Type | Description |
+|---|---|---|
+| `author_ids` | Many2many → `ir.module.author` | Authors parsed from the manifest `author` key. |
+| `module_type_id` | Many2one → `ir.module.type` | The type resolved by the first matching type rule. |
+| `python_code_qty` | Integer | Number of Python code lines. |
+| `xml_code_qty` | Integer | Number of XML code lines. |
+| `js_code_qty` | Integer | Number of JavaScript code lines. |
+| `css_code_qty` | Integer | Number of CSS code lines. |
+| `scss_code_qty` | Integer | Number of SCSS code lines. |
+
+All fields are read-only; they are populated by the analysis process.
+
+## Accessing the analysis view
+
+Navigate to **Apps → Module Analysis → Installed modules by Types** to open the pivot and chart views grouped by module type. This gives an at-a-glance breakdown of the code running on your instance.
+
+## Running the analysis
+
+<Steps>
+  <Step title="Run manually">
+    Go to **Settings → Technical → Scheduled Actions** and run the **Update Module Analysis** action manually. The cron is inactive by default.
+  </Step>
+  <Step title="Schedule automatic runs">
+    In the same **Scheduled Actions** list, open **Update Module Analysis** and activate it, then set the desired interval. Once active, the action calls `cron_analyse_code()` on `ir.module.module`, which analyses all modules currently in the `installed` state.
+  </Step>
+</Steps>
+
+## Configuring type rules
+
+Go to **Apps → Module Analysis → Module Types Rules** to view and edit the rule set.
+
+Each rule requires:
+- **Sequence** — lower values are evaluated first.
+- **Module domain** — an Odoo domain string, e.g. `[("author", "ilike", "OCA")]`.
+- **Module type** — the `ir.module.type` to assign when the domain matches.
+
+<Tip>
+Add a rule with a domain that matches your company name in the `author` field to automatically classify all internally developed modules as a custom type.
+</Tip>
+
+## Excluding files from analysis
+
+Two system parameters control which paths are skipped during code counting. Find them under **Settings → Technical → Parameters → System Parameters**:
+
+- `module_analysis.exclude_directories` — comma-separated directory names to skip.
+- `module_analysis.exclude_files` — comma-separated file names to skip.
+
+## Extending the analysis
+
+To track additional file types, inherit `ir.module.module` in a custom addon and override `_get_analyse_settings()`:
+
+```python
+from odoo import api, fields, models
+
+class IrModuleModule(models.Model):
+    _inherit = 'ir.module.module'
+
+    html_code_qty = fields.Integer(string='HTML Code Quantity')
+
+    @api.model
+    def _get_analyse_settings(self):
+        res = super()._get_analyse_settings()
+        res['.html'] = {'code_count': 'html_code_qty'}
+        return res
+```
+
+The dictionary maps file extensions to `{metric_key: field_name}` pairs, where `metric_key` corresponds to an attribute on `pygount.SourceAnalysis` (e.g. `code_count`).

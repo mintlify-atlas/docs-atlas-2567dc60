@@ -1,0 +1,104 @@
+---
+title: "Base Multi Image: attach multiple images to records"
+description: "Abstract mixin that adds an ordered image gallery to any Odoo record, with storage options including the filestore, database, OS filesystem, or external URL."
+---
+
+`base_multi_image` is a base/dependency module that gives any Odoo model the ability to store an ordered collection of images instead of a single image field. It defines two models: `base_multi_image.image` (the individual image record) and `base_multi_image.owner` (the abstract mixin your model inherits from). The module does not add any visible gallery on its own—it is intended to be consumed by feature modules such as `product_multi_image`.
+
+<Note>
+  Installing this module directly will not change any existing behavior. It provides abstract models that become active once another module—such as `product_multi_image`—inherits from them.
+</Note>
+
+## Models
+
+### `base_multi_image.image`
+
+Stores a single image entry belonging to an owner record. Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `owner_id` | Integer | ID of the owning record. |
+| `owner_model` | Char | Model name of the owning record (e.g. `product.template`). |
+| `owner_ref_id` | Reference | Computed reference combining `owner_model` and `owner_id`. |
+| `storage` | Selection | Where the image data lives: `filestore`, `attachment`, `db`, `file`, or `url`. |
+| `name` | Char | Human-readable image title (translatable). |
+| `sequence` | Integer | Controls display order (default 10). |
+| `image_1920` | Image | Full-size image (max 1920×1920), computed from the active storage backend. |
+| `attachment_image` | Image | Used when storage is `filestore` (default). |
+| `file_db_store` | Binary | Used when storage is `db`. |
+| `path` | Char | Filesystem path when storage is `file`. |
+| `url` | Char | Remote URL when storage is `url`. URL responses are cached via `ormcache`. |
+| `attachment_id` | Many2one | Reference to `ir.attachment` when storage is `attachment`. |
+| `comments` | Text | Optional notes (translatable). |
+
+A SQL unique constraint prevents two images with the same `name` on the same owner record.
+
+### `base_multi_image.owner` (abstract mixin)
+
+Inherit this model to enable multi-image support on your own model. It exposes:
+
+| Field | Description |
+|---|---|
+| `image_ids` | `One2many` to `base_multi_image.image`, filtered to the owner model. |
+| `image_1920` | Computed field returning the first image's data—provides a compatibility layer for models that previously had a single image field. |
+
+The mixin also overrides `unlink` to cascade-delete all related images when the owner record is deleted (unless `env.context['bypass_image_removal']` is `True`).
+
+## Adding multi-image support to your module
+
+<Steps>
+  <Step title="Inherit the owner mixin">
+    Add `base_multi_image.owner` to the `_inherit` list of your model:
+
+    ```python
+    class MyOwner(models.Model):
+        _name = "my.model.name"
+        _inherit = ["my.model.name", "base_multi_image.owner"]
+    ```
+  </Step>
+
+  <Step title="Add the image gallery widget to your view">
+    Embed the `image_ids` field in your form view using kanban mode and pass the owner context:
+
+    ```xml
+    <field
+        name="image_ids"
+        nolabel="1"
+        context="{
+            'default_owner_model': 'my.model.name',
+            'default_owner_id': id,
+        }"
+        mode="kanban"/>
+    ```
+  </Step>
+
+  <Step title="Handle migration from a single image field (optional)">
+    If your model previously had a single image field and you want to migrate existing data, use the provided hook helpers:
+
+    ```python
+    from odoo.addons.base_multi_image.hooks import (
+        pre_init_hook_for_submodules,
+        uninstall_hook_for_submodules,
+    )
+
+    def pre_init_hook(cr):
+        pre_init_hook_for_submodules(cr, "my.model.name", "image")
+
+    def uninstall_hook(cr, registry):
+        uninstall_hook_for_submodules(cr, registry, "my.model.name")
+    ```
+  </Step>
+</Steps>
+
+## Managing images
+
+All stored images can be browsed directly at **Settings > Technical > Multi images**. In practice, you will manage them from the form views provided by modules that inherit this behavior.
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `base_multi_image` |
+| Version | 18.0.1.0.0 |
+| License | AGPL-3 |
+| Depends on | `base` |

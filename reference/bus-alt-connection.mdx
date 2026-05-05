@@ -1,0 +1,69 @@
+---
+title: "Bus Alt Connection: Odoo longpolling with PgBouncer"
+description: "Fix Odoo's bus longpolling (LISTEN/NOTIFY) when running behind PgBouncer in transaction pooling mode by routing the listener connection directly to PostgreSQL."
+---
+
+PgBouncer is a lightweight connection pooler that sits between Odoo and PostgreSQL, significantly reducing the number of open server connections in multi-instance deployments. The catch is that Odoo's longpolling mechanism — used for real-time notifications in the messaging bus — relies on PostgreSQL's `LISTEN`/`NOTIFY` feature, which requires a persistent server connection that PgBouncer's `transaction` pool mode cannot maintain. `bus_alt_connection` resolves this conflict by directing that one special listening connection straight to PostgreSQL, bypassing PgBouncer entirely.
+
+## Why PgBouncer breaks the Odoo bus
+
+Odoo's built-in connection pool operates per-process. In practice each worker holds up to three open connections. With many workers, this can mean dozens of connections permanently open to PostgreSQL even when idle.
+
+PgBouncer addresses this by sharing a pool of server connections across all workers. The effective mode is `pool_mode = transaction`: a server connection is held only for the duration of a single transaction, then returned to the pool. This is ideal for short-lived queries.
+
+However, `LISTEN` requires the server connection to stay open between transactions so PostgreSQL can push notifications to it. PgBouncer's `transaction` mode does not support this — the `LISTEN` statement is silently dropped when the connection is returned to the pool. The `NOTIFY` side works fine; only the subscriber (`LISTEN`) side fails.
+
+<Info>
+  Odoo's bus dispatcher opens exactly one listening connection per server instance. This module overrides the dispatcher to open that connection directly to PostgreSQL rather than through PgBouncer.
+</Info>
+
+## Installation
+
+This module must be loaded server-wide. It does not need to be installed inside any database.
+
+<Steps>
+  <Step title="Add the module to your addons path">
+    Place `bus_alt_connection` in your Odoo addons directory.
+  </Step>
+  <Step title="Load it as a server-wide module">
+    Edit `/etc/odoo.conf`:
+
+    ```ini odoo.conf
+    server_wide_modules = web,bus_alt_connection
+    ```
+
+    Or start Odoo with the `--load` flag:
+
+    ```bash
+    odoo --load=web,bus_alt_connection
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+You must tell the module how to reach PostgreSQL directly, bypassing PgBouncer. Configure the direct host and port using either environment variables or the Odoo configuration file.
+
+<Tabs>
+  <Tab title="Environment variables">
+    ```bash
+    export IMDISPATCHER_DB_HOST=db-01
+    export IMDISPATCHER_DB_PORT=5432
+    ```
+  </Tab>
+  <Tab title="odoo.conf">
+    ```ini odoo.conf
+    [options]
+    imdispatcher_db_host = db-01
+    imdispatcher_db_port = 5432
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  The values for `imdispatcher_db_host` and `imdispatcher_db_port` must point directly to the PostgreSQL server, **not** to PgBouncer. Using the PgBouncer address here defeats the purpose of this module and will cause intermittent bus failures.
+</Warning>
+
+<Tip>
+  The rest of Odoo's connections (regular queries, transactions) continue to go through PgBouncer normally. Only the single longpolling listener connection bypasses it.
+</Tip>

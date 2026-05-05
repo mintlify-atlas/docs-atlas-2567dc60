@@ -1,0 +1,107 @@
+---
+title: "Attachment Queue: async file processing in Odoo"
+description: "Queue-based module for processing file attachments asynchronously in Odoo, with state tracking, failure notifications, and a reschedule wizard."
+---
+
+The `attachment_queue` module adds asynchronous processing capabilities to Odoo attachments. It introduces the `attachment.queue` model, which wraps a standard `ir.attachment` and adds state tracking, job scheduling via `queue_job`, and failure notification support. Any module that needs to process files in the background can build on top of this foundation.
+
+## How it works
+
+Each `attachment.queue` record delegates its core fields to an underlying `ir.attachment` via `_inherits`. On top of the attachment data, it stores processing state, an optional file type selector, and a timestamped completion field.
+
+When a record is created, the module automatically schedules a background job using the `queue_job` channel `root.attachment_queue`. The job calls `run_as_job()`, which in turn calls `run()` and then `_run()`. Submodules override `_run()` to implement the actual processing logic for a given `file_type`.
+
+### State machine
+
+| State | Meaning |
+|---|---|
+| `pending` | Created, waiting to be processed or rescheduled |
+| `done` | Processing completed successfully |
+| `failed` | An error occurred; `state_message` stores the traceback |
+
+Transitions happen automatically: a new record starts as `pending`, moves to `done` on success, or `failed` if an exception is raised. The `set_done()` method allows manually marking a record as done with an audit message.
+
+<Note>
+  Concurrent processing is protected by a `SELECT ... FOR UPDATE NOWAIT` lock. If a record is already being processed, the job raises a `RetryableJobError` to be retried later.
+</Note>
+
+## Key model fields
+
+The `attachment.queue` model (`attachment_queue/models/attachment_queue.py`) exposes the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `attachment_id` | Many2one (`ir.attachment`) | Delegated attachment; provides `name`, `datas`, and all standard attachment fields |
+| `file_type` | Selection | Extensible; submodules add their own selection values to determine processing logic |
+| `state` | Selection | `pending`, `done`, or `failed` |
+| `state_message` | Text | Error details when state is `failed` |
+| `date_done` | Datetime | Timestamp set when processing completes |
+| `failure_emails` | Char (computed) | Comma-separated email list for failure notifications; override `_get_failure_emails()` to populate |
+
+## Dependencies
+
+- `base`, `mail` — standard Odoo
+- `queue_job` — OCA connector framework for background jobs ([OCA/queue](https://github.com/OCA/queue))
+- `openupgradelib` — Python dependency for migration support
+
+## Usage
+
+<Steps>
+  <Step title="Install the module">
+    Install `attachment_queue` and ensure `queue_job` is running. The module registers the `root.attachment_queue` job channel automatically via `data/queue_job_channel.xml`.
+  </Step>
+  <Step title="Navigate to the queue">
+    Go to **Settings > Technical > Database Structure > Attachments Queue** to view all queue records and their current states.
+  </Step>
+  <Step title="Monitor processing">
+    Filter by `state` to find pending or failed items. Each record shows the underlying file name, the `file_type`, and the `state_message` if it failed.
+  </Step>
+  <Step title="Configure the batch cron limit">
+    Go to **Settings > Technical > System Parameters** and set the key `attachment_queue_cron_batch_limit` to control how many attachments the cron task processes per run.
+  </Step>
+</Steps>
+
+## Rescheduling failed items
+
+When a queue item reaches the `failed` state, you can reschedule it from the form view using the **Reschedule** button. This calls `button_reschedule()`, which resets `state` to `pending`, clears `state_message`, and enqueues a new background job.
+
+<Warning>
+  Rescheduling does not fix the underlying cause of the failure. Check `state_message` before rescheduling to understand what went wrong.
+</Warning>
+
+You can also trigger processing manually from the form view using the **Run** button, which calls `button_manual_run()` and processes the attachment synchronously in the current request.
+
+## Extending for custom file types
+
+To add a new `file_type` and custom processing logic, inherit `attachment.queue` in your module and override `_run()`:
+
+```python
+class MyAttachmentQueue(models.Model):
+    _inherit = "attachment.queue"
+
+    file_type = fields.Selection(
+        selection_add=[("my_type", "My Custom Type")]
+    )
+
+    def _run(self):
+        self.ensure_one()
+        if self.file_type == "my_type":
+            # process self.datas here
+            pass
+        else:
+            return super()._run()
+```
+
+Override `_get_failure_emails()` to return a comma-separated list of addresses that should receive failure notification emails:
+
+```python
+def _get_failure_emails(self):
+    self.ensure_one()
+    if self.file_type == "my_type":
+        return "ops-team@example.com"
+    return super()._get_failure_emails()
+```
+
+<Info>
+  Job attributes such as channel, priority, and max retries can be customized per file type by overriding `_job_attrs()`.
+</Info>

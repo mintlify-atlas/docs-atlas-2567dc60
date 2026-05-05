@@ -1,0 +1,90 @@
+---
+title: "DB Filter from Header: route requests by HTTP header"
+description: "Select which Odoo database to serve based on a regular expression passed in the X-Odoo-dbfilter HTTP request header. Ideal for multi-tenant setups."
+---
+
+The `dbfilter_from_header` module lets your reverse proxy tell Odoo which database to use on each request. Instead of relying solely on hostname-based database filtering, the proxy sets the `X-Odoo-dbfilter` header containing a regular expression, and Odoo uses that expression to narrow down the list of matching databases. This is particularly useful when database names cannot be inferred from the proxied host name.
+
+## How it works
+
+When a request arrives, Odoo first applies its standard `dbfilter` configuration. `dbfilter_from_header` then reads the `HTTP_X_ODOO_DBFILTER` environment variable from the WSGI request (set by the `X-Odoo-dbfilter` header) and further filters the database list using `re.match` against that regular expression. The module monkey-patches `odoo.http.db_filter` at startup — but only when both `proxy_mode = True` and `dbfilter_from_header` is listed in `server_wide_modules`.
+
+<Info>
+  The standard Odoo `dbfilter` setting is still applied first. The header filter reduces the result further; it does not replace the base filter.
+</Info>
+
+## Use cases
+
+- **Multi-tenant load balancers**: route traffic from different customer subdomains to isolated databases without encoding the database name in the hostname.
+- **Staging and blue/green deployments**: a single proxy can direct specific requests to specific databases by injecting the appropriate header.
+- **Shared infrastructure**: multiple Odoo instances behind one reverse proxy, each serving a distinct database pattern.
+
+## Installation
+
+This module must be loaded server-wide. It does not need to be installed inside any individual database.
+
+<Steps>
+  <Step title="Add the module to your addons path">
+    Place `dbfilter_from_header` in your Odoo addons directory.
+  </Step>
+  <Step title="Load it as a server-wide module">
+    Edit `/etc/odoo.conf` (or pass `--load` on the command line):
+
+    ```ini odoo.conf
+    server_wide_modules = base,web,dbfilter_from_header
+    ```
+  </Step>
+  <Step title="Enable proxy mode">
+    In the same configuration file, set:
+
+    ```ini odoo.conf
+    proxy_mode = True
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  If `proxy_mode` is not set to `True`, the module will not activate its monkey-patch and the header will be ignored.
+</Warning>
+
+## Reverse proxy configuration
+
+Set the `X-Odoo-dbfilter` header in your proxy to a regular expression matching the target database name(s).
+
+<Tabs>
+  <Tab title="nginx">
+    ```nginx nginx.conf
+    proxy_set_header X-Odoo-dbfilter [your filter regex];
+    ```
+  </Tab>
+  <Tab title="Caddy">
+    ```text Caddyfile
+    proxy_header X-Odoo-dbfilter [your filter regex]
+    ```
+  </Tab>
+  <Tab title="Apache">
+    ```apache .htaccess
+    RequestHeader set X-Odoo-dbfilter [your filter regex]
+    ```
+  </Tab>
+</Tabs>
+
+### Example: single database
+
+To route all requests to a database named `mycompany_prod`:
+
+```nginx nginx.conf
+proxy_set_header X-Odoo-dbfilter ^mycompany_prod$;
+```
+
+### Example: prefix match
+
+To allow any database whose name starts with `tenant_`:
+
+```nginx nginx.conf
+proxy_set_header X-Odoo-dbfilter ^tenant_.*;
+```
+
+<Tip>
+  Anchor your regex with `^` and `$` when you want an exact match. Without anchors, `re.match` in Python only anchors at the start, so `mydb` would also match `mydb_staging`.
+</Tip>

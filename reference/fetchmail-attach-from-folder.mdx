@@ -1,0 +1,85 @@
+---
+title: "Fetchmail Attach from Folder: link IMAP emails to records"
+description: "Monitor IMAP folders and attach emails to existing Odoo records by matching addresses or domains. Works alongside fetchmail without extra mail client setup."
+---
+
+`fetchmail_attach_from_folder` extends Odoo's fetchmail server configuration with a **Folders** tab. Each folder entry monitors an IMAP mailbox path and, when new messages arrive, attempts to match them to an existing Odoo record. Matched messages are attached as chatter messages on the record. This gives teams a lightweight way to archive emails in Odoo by simply dragging messages into a shared IMAP folder—no mail client plugin required.
+
+## How matching works
+
+Each folder configuration specifies a matching algorithm. The algorithm examines a designated email header field and compares it against a field on the target model.
+
+<AccordionGroup>
+  <Accordion title="Exact email address">
+    Compares the full email address from the chosen email header field (`mail_field`, e.g. `from`, `to`, `to,cc,bcc`) against a field on the target model (`model_field`, e.g. `email` for `res.partner`). A match is found only when the addresses are identical.
+  </Accordion>
+  <Accordion title="Domain of email address">
+    Extracts the domain part of the address(es) found in `mail_field` and matches against records whose `model_field` value shares the same domain. Because this is a fuzzy match, enable **Use First Match** unless you are confident only one record will match.
+  </Accordion>
+  <Accordion title="Odoo Standard">
+    Calls the model's standard `message_process` action, which is Odoo's built-in routing logic. This typically creates a new record (e.g., a new helpdesk ticket). It does not use `model_field` or `mail_field`.
+  </Accordion>
+</AccordionGroup>
+
+## Folder configuration fields
+
+| Field | Description |
+|---|---|
+| **Fetch from Folder** (`path`) | IMAP path of the folder to monitor (e.g. `INBOX.From partners`). Quote paths with spaces as required by your server. |
+| **Archive Folder** (`archive_path`) | Optional IMAP path to move successfully processed messages into. Created automatically if it does not exist. |
+| **Target Model** (`model_id`) | The Odoo model to attach matched emails to. |
+| **Field (model)** (`model_field`) | Field on the target model to match against (e.g. `email`, `partner_id.email`). |
+| **Field (email)** (`mail_field`) | Email header field(s) to inspect (e.g. `from`, `to,cc,bcc`). |
+| **Matching Algorithm** (`match_algorithm`) | `email_exact`, `email_domain`, or `odoo_standard`. |
+| **Matching Domain** (`domain`) | Optional Odoo domain expression to pre-filter candidate records. |
+| **Use First Match** (`match_first`) | When multiple records match, use the first one instead of treating it as no match. |
+| **Delete Matched Emails** (`delete_matching`) | Delete messages from the IMAP folder after successful attachment. |
+| **Flag Non-Matching Emails** (`flag_nonmatching`) | Mark unmatched messages as important (default: on). |
+| **Mark email as seen** (`seen`) | When to set the `\Seen` IMAP flag: `on_fetch`, `after processing`, `when matching`, or `never`. |
+| **Fetch Unseen Only** | Only retrieve unread messages from the folder. |
+| **Fetch Last 24 Hours Only** | Restrict fetching to messages received in the past 24 hours, reducing reprocessing risk. |
+| **Server Action** (`action_id`) | Optional server action triggered on each matched record after attachment. |
+
+<Note>
+  Each folder uses a separate IMAP connection. If a folder's status is not **Confirmed**, it is skipped during fetch. Use the **Confirm Folder** button on each folder row to validate the IMAP path and flip the status to Confirmed.
+</Note>
+
+## Setting up a typical configuration
+
+<Steps>
+  <Step title="Add the fetchmail server">
+    Go to **Settings > Technical > Email > Incoming Mail Servers** and confirm your IMAP server connection.
+  </Step>
+  <Step title="Open the Folders tab">
+    On the confirmed server form, click the **Folders** tab and add a new row.
+  </Step>
+  <Step title="Configure the folder path and target model">
+    Set **Fetch from Folder** to the IMAP path (e.g. `INBOX.From partners`). Set **Target Model** to `res.partner`.
+  </Step>
+  <Step title="Set matching fields">
+    Set **Field (model)** to `email` and **Field (email)** to `from`. Optionally fill **Matching Domain** with `[('customer_rank', '>', 0)]` to restrict matches to customers only.
+  </Step>
+  <Step title="Confirm the folder">
+    Click **Confirm Folder**. Odoo connects to the IMAP server and verifies the path exists. The status changes to **Confirmed**.
+  </Step>
+  <Step title="Enable cleanup (optional)">
+    Tick **Delete Matched Emails** to keep the folder from growing indefinitely. Alternatively, set an **Archive Folder** to move processed messages there instead of deleting them.
+  </Step>
+</Steps>
+
+## Processing only specified folders
+
+Enable **Process Only Specified Folders** (`folders_only`) on the server to skip the standard Odoo IMAP inbox processing entirely and rely solely on the folder configurations. This is useful when the server is dedicated to folder-based routing.
+
+## Manual attachment
+
+Each confirmed folder row has an **Attach Mail Manually** button that opens a wizard, letting you trigger attachment for a selected message outside of the scheduled fetch cycle.
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `fetchmail_attach_from_folder` |
+| Version | 18.0.2.0.0 |
+| License | AGPL-3 |
+| Depends on | `mail` |

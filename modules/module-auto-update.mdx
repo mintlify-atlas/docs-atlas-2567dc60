@@ -1,0 +1,81 @@
+---
+title: "Module Auto Update: detect and apply module changes"
+description: "Automatically upgrade only the Odoo modules whose file checksums have changed since the last successful update, avoiding full database upgrades."
+---
+
+The `module_auto_update` addon tracks SHA-1 checksums of every installed module on disk and compares them against checksums saved in the database after each successful upgrade. When a mismatch is detected, only those changed modules are marked for upgrade, keeping unnecessary work to a minimum.
+
+## How it works
+
+On each run, the addon:
+
+1. Calls `update_list()` to refresh the module registry.
+2. Computes a current checksum for every installed module using `addon_hash()`, skipping excluded file patterns and languages not installed in the database.
+3. Compares current checksums against the values stored in the `module_auto_update.installed_checksums` system parameter.
+4. Marks changed modules as "to upgrade" via `button_upgrade()`.
+5. Runs the standard Odoo upgrade process through `base.module.upgrade`.
+6. Saves the new checksums to the database on success.
+
+If no checksums have changed and no modules are in a partial state (`to install`, `to remove`, or `to upgrade`), the method exits immediately without touching the database.
+
+## Key method
+
+The central method is `upgrade_changed_checksum()` on `ir.module.module`:
+
+```python
+@api.model
+def upgrade_changed_checksum(self, overwrite_existing_translations=False):
+    """Run an upgrade of the database, upgrading only changed modules.
+
+    Installed modules for which the checksum has changed since the
+    last successful run of this method are marked 'to upgrade',
+    then the normal Odoo scheduled upgrade process is launched.
+    """
+```
+
+<Note>
+The first time `upgrade_changed_checksum()` runs after installation there are no saved checksums yet, so **all installed modules** are upgraded. This is intentional — it ensures a safe baseline. If you know the current state is consistent, you can pre-populate checksums by calling `_save_installed_checksums()` instead.
+</Note>
+
+## Triggering an upgrade
+
+<Steps>
+  <Step title="Via the Apps menu (developer mode)">
+    Navigate to **Apps**, then click the **Auto-Upgrade Modules** button. This button is only visible when Odoo developer mode is active. Restart the Odoo instance afterwards to minimise the risk of stale in-memory state.
+  </Step>
+  <Step title="Via an Odoo shell session">
+    Open a shell session against your database and call the method directly:
+
+    ```python
+    env['ir.module.module'].upgrade_changed_checksum()
+    ```
+  </Step>
+  <Step title="Via a scheduled action">
+    Create or configure a scheduled action that calls `upgrade_changed_checksum()` on `ir.module.module`. This allows hands-free, periodic upgrades in non-production environments.
+  </Step>
+</Steps>
+
+## Configuration
+
+The addon reads one system parameter that controls which files are excluded when computing checksums.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `module_auto_update.exclude_patterns` | `*.pyc,*.pyo,i18n/*.pot,i18n_extra/*.pot,static/*,tests/*` | Comma-separated list of `fnmatch`-compatible filename patterns to skip. |
+
+In addition to the patterns above, `.po` translation files for languages that are not installed in the database are always excluded from the checksum calculation.
+
+To change the default exclusions, go to **Settings → Technical → Parameters → System Parameters** and update or create the `module_auto_update.exclude_patterns` key.
+
+<Tip>
+If you prefer a CLI-based approach, [click-odoo-contrib](https://github.com/acsone/click-odoo-contrib) provides `click-odoo-update`, which offers equivalent checksum-based update logic for integration into non-Odoo maintenance pipelines.
+</Tip>
+
+## Error handling
+
+Two custom exceptions guard against silent failures:
+
+- `FailedUpgradeError` — raised when a module that was marked "to upgrade" is not in the expected state after the upgrade call, preventing checksums from being saved for modules that were never actually upgraded.
+- `IncompleteUpgradeError` — raised when modules remain in a partial state (`to install`, `to remove`, `to upgrade`) after the upgrade process completes.
+
+Both exceptions are subclasses of `odoo.exceptions.UserError`.

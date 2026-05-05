@@ -1,0 +1,86 @@
+---
+title: "Attachment Delete Restrict: prevent accidental deletions"
+description: "Restrict deletion of Odoo attachments by owner, custom group, or both, configurable globally or per model, with no code changes required."
+---
+
+The `attachment_delete_restrict` module adds configurable protection against accidental or unauthorized deletion of attachments linked to Odoo records. Restrictions can be applied globally to all models or selectively per model, and you can choose from five distinct protection levels without writing any code.
+
+## How it works
+
+The module overrides `ir.attachment.unlink()`. Before any delete is executed, it checks the restriction level that applies to the attachment's parent model. If the current user does not satisfy the restriction, a `ValidationError` is raised with a message listing which users do have permission.
+
+Superuser operations (`env.su`) always bypass all restrictions.
+
+## Protection levels
+
+Five levels are available, defined as the `restrict_delete_attachment` selection on both `ir.model` and `res.config.settings`:
+
+| Value | Label | Who can delete |
+|---|---|---|
+| `none` | No restriction | All users |
+| `owner` | Owner | The attachment's creator (`create_uid`) and members of `base.group_system` |
+| `custom` | Custom | Specific groups and users configured per model (or globally) |
+| `owner_custom` | Owner + Custom | Creator, system admins, plus the configured groups and users |
+| `default` | Use global configuration | Defers to the global setting in General Settings |
+
+The `default` value on a model means it inherits the site-wide restriction level set in **Settings > General Settings > Permissions**.
+
+## Global configuration
+
+<Steps>
+  <Step title="Open General Settings">
+    Go to **Settings > General Settings** and locate the **Permissions** section.
+  </Step>
+  <Step title="Set the global restriction level">
+    Choose a value for **Restrict Delete Attachments**. This applies to all models whose per-model setting is `default` or unset. The global setting is stored in `ir.config_parameter` under the key `attachment_delete_restrict.global_restrict_delete_attachment`.
+  </Step>
+  <Step title="Assign global groups or users (Custom levels)">
+    If you selected `custom` or `owner_custom`, the **Attachment Deletion Groups** and **Attachment Deletion Users** fields appear. Assign the groups and users who should be permitted to delete attachments across all models that use the global setting.
+  </Step>
+</Steps>
+
+## Per-model configuration
+
+The `Custom` and `Owner + Custom` levels support model-level assignment. These require additional setup on the model record itself.
+
+<Steps>
+  <Step title="Open the model record">
+    Go to **Settings > Technical > Database Structure > Models** and open the model for which you want to restrict attachment deletion.
+  </Step>
+  <Step title="Enable restriction">
+    Set **Restrict Attachment Deletion** to `Custom` or `Owner + Custom`.
+  </Step>
+  <Step title="Assign groups and users">
+    Fill in **Attachment Deletion Groups** and/or **Attachment Deletion Users**. If both are left empty, no users will be able to delete attachments for this model (other than superusers).
+  </Step>
+</Steps>
+
+<Tip>
+  You can also navigate from the group or user form. Open a group or user, go to the **Attachment Deletion Models** tab, and add models there — the relationship is bidirectional.
+</Tip>
+
+## Model fields added
+
+### `ir.model` extensions
+
+| Field | Type | Description |
+|---|---|---|
+| `restrict_delete_attachment` | Selection | Per-model restriction level; defaults to `default` |
+| `delete_attachment_group_ids` | Many2many (`res.groups`) | Groups allowed to delete attachments of this model |
+| `delete_attachment_user_ids` | Many2many (`res.users`) | Users allowed to delete attachments of this model |
+
+### `res.config.settings` extensions
+
+| Field | Type | Description |
+|---|---|---|
+| `global_restrict_delete_attachment` | Selection | Site-wide default restriction level |
+| `global_delete_attachment_group_ids` | Many2many (`res.groups`) | Groups with global delete permission (for `custom`/`owner_custom`) |
+| `global_delete_attachment_user_ids` | Many2many (`res.users`) | Users with global delete permission (for `custom`/`owner_custom`) |
+
+<Note>
+  Global group and user assignments are persisted in `ir.config_parameter` under the keys `attachment_delete_restrict.global_delete_attachment_group_ids` and `attachment_delete_restrict.global_delete_attachment_user_ids`. These are stored as serialized ID lists.
+</Note>
+
+## Dependency
+
+This module depends only on `base` and `base_setup`, so it can be added to any Odoo 18 installation without requiring additional OCA modules.

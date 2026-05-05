@@ -1,0 +1,74 @@
+---
+title: "Onchange Helper: trigger onchanges from Python code"
+description: "Call play_onchanges() to execute Odoo onchange handlers from server-side Python, so records created programmatically carry the same derived values as the UI."
+---
+
+The **Onchange Helper** module adds a `play_onchanges()` method to every Odoo model. It lets you trigger the same onchange logic that fires in the browser when a user edits a field, but from Python code—useful whenever you create or update records programmatically and need the derived field values that onchanges would normally populate.
+
+## Method signature
+
+```python
+Model.play_onchanges(values, onchange_fields)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `values` | `dict` | Initial field values for the record |
+| `onchange_fields` | `list` | Fields whose registered onchange methods should be triggered, in order |
+
+Returns a dict containing the original `values` merged with all values produced by the onchange methods. Computed read-only fields without an inverse are excluded from the result.
+
+<Warning>
+  The order of fields in `onchange_fields` matters. Onchange methods are executed in the order the fields appear in the list. If one onchange sets a value that a later onchange depends on, list the fields in dependency order.
+</Warning>
+
+## Creating a new record with onchange values
+
+The most common case is building a `vals` dict before calling `create()`. Without `play_onchanges`, fields filled in by onchanges—like `partner_invoice_id` or `pricelist_id` on a sale order—would be missing.
+
+```python creating a sale order with onchange values
+vals = {'partner_id': 1}
+vals = self.env['sale.order'].play_onchanges(vals, ['partner_id'])
+# vals now includes partner_invoice_id, partner_shipping_id, pricelist_id, etc.
+
+order = self.env['sale.order'].create(vals)
+```
+
+## Including default values for additional fields
+
+Pass extra field names in `onchange_fields` to also receive their default values in the result, even if those fields are not in the initial `values` dict.
+
+```python fetching default values alongside onchange results
+vals = {'partner_id': 1}
+vals = self.env['sale.order'].play_onchanges(vals, ['partner_id', 'date_order'])
+# vals includes both the onchange-derived values and the default for date_order
+```
+
+## Playing onchanges on an existing record
+
+Call `play_onchanges` on an existing record instance. The method uses the record's current field values as the baseline and merges them with the `values` you provide before triggering the listed onchanges.
+
+```python updating an existing record
+vals = {'partner_shipping_id': 1}
+vals = sale.play_onchanges(vals, ['partner_shipping_id'])
+# vals reflects changes derived from the new shipping partner
+# applied on top of the existing sale order's current values
+```
+
+## How it works
+
+<Steps>
+  <Step title="Collect all field values">
+    If called on an existing record, `play_onchanges` reads every field from the record (via `sudo` to avoid permission issues). If called on the model class (no record), it fetches the model's default values instead. The input `values` dict is merged on top.
+  </Step>
+  <Step title="Execute onchange methods in order">
+    For each field listed in `onchange_fields`, every registered `@api.onchange` method for that field is called via the standard `onchange()` API. Results are accumulated and merged back into the working values dict so subsequent onchanges see updated state.
+  </Step>
+  <Step title="Return the merged result">
+    The method returns a flat dict containing the original input fields, any new fields added by onchange methods, and the values of the fields listed in `onchange_fields`. Read-only computed fields without an inverse are stripped from the output.
+  </Step>
+</Steps>
+
+<Note>
+  To avoid triggering SQL write operations during the onchange simulation, records are processed as in-memory (transient) objects when onchange methods assign field values.
+</Note>

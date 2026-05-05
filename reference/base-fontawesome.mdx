@@ -1,0 +1,66 @@
+---
+title: "Base FontAwesome: up-to-date icon library for Odoo"
+description: "Upgrade Odoo's bundled FontAwesome 4 to version 6.7.2, gaining thousands of solid, regular, and brand icons across backend views, frontend pages, and reports."
+---
+
+Odoo ships with a pinned version of FontAwesome 4 that cannot be updated without overwriting core files. `base_fontawesome` replaces that bundled stylesheet with FontAwesome **6.7.2** across all three Odoo asset bundles—backend, frontend, and reports—and includes the v4 compatibility shims so existing `fa-*` class names continue to work.
+
+## What changes after installation
+
+The module uses Odoo's asset `replace` directive to swap out `web/static/src/libs/fontawesome/css/font-awesome.css` in each bundle, then injects:
+
+- `fontawesome-6.7.2/css/all.css` — the full FA 6 stylesheet (free tier)
+- `fontawesome-6.7.2/css/v4-shims.css` — backward-compatible aliases for FA 4 class names
+
+This applies to:
+
+| Asset bundle | Coverage |
+|---|---|
+| `web.assets_backend` | Odoo back-office views |
+| `web.assets_frontend` | Portal and website pages |
+| `web.report_assets_common` | PDF reports via Wkhtmltopdf / Chromium |
+
+<Note>
+  Because the v4 shims are included, any existing icon that used `fa fa-*` class syntax will continue to render correctly. You do not need to update existing views after installing this module.
+</Note>
+
+## Using icons in views
+
+After installation, all free icons from the [FontAwesome 6 gallery](https://fontawesome.com/icons?d=gallery&m=free) are available. The module adds three custom attributes for Odoo `<button>` and other elements to select the icon style:
+
+| Attribute | Icon style | Example class |
+|---|---|---|
+| `solid_icon` | Solid (default FA style) | `fa-house` |
+| `regular_icon` | Regular (outline) | `far fa-envelope` |
+| `brand_icon` | Brand logos | `fa-amazon-pay` |
+
+```xml
+<!-- Solid icon -->
+<button solid_icon="fa-house" string="Home"/>
+
+<!-- Regular (outline) icon -->
+<button regular_icon="far fa-envelope" string="Email"/>
+
+<!-- Brand icon -->
+<button brand_icon="fa-amazon-pay" string=" fa-amazon-pay"/>
+<button brand_icon="fas fa-hand-sparkles" string=" fas fa-hand-sparkles"/>
+<button brand_icon="fas fa-handshake-slash" string=" fas fa-handshake-slash"/>
+```
+
+<Tip>
+  Check whether an icon exists in FA 6 Free before using it. Some icons present in FA 4 were moved to the Pro tier in FA 6. Use the v4 shim name or find the FA 6 equivalent at fontawesome.com.
+</Tip>
+
+## Companion module: base_fontawesome_web_editor
+
+When the `web_editor` module is installed (i.e., the website or mass mailing app is present), `base_fontawesome_web_editor` is automatically activated. It extends the WYSIWYG editor's font/icon picker to expose the full FA 6 icon set, including the media dialog (`html_editor.assets_media_dialog`). The companion module declares `"auto_install": True` and requires both `web_editor` and `base_fontawesome`.
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `base_fontawesome` |
+| Version | 18.0.2.0.0 |
+| FontAwesome version | 6.7.2 |
+| License | LGPL-3 |
+| Depends on | `web` |

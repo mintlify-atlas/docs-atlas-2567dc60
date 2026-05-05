@@ -1,0 +1,70 @@
+---
+title: "Database Size: monitor your Odoo PostgreSQL storage"
+description: "Track daily per-model disk usage across tables, indexes, many2many relations, and attachments, and compare storage growth over time with a built-in report."
+---
+
+The `database_size` module (v18.0.1.0.2) gives Odoo administrators a detailed, time-series view of how storage is consumed across every model in the database. Once a day a scheduled action snapshots the full PostgreSQL storage breakdown — table data, indexes, many2many relation tables, and linked file attachments — into `ir.model.size` records. You can query those records directly, or open the comparison report to see how any model's footprint has changed between two arbitrary dates.
+
+## What is measured
+
+Each daily snapshot captures the following metrics per model, all expressed in **megabytes**:
+
+| Metric | Description |
+|---|---|
+| **Bare Table Size** | Raw disk usage of the model's PostgreSQL table, excluding indexes and TOAST tables. |
+| **Index Size** | Combined disk usage of all indexes on the model's table. |
+| **Total Table Size** | Bare Table Size + Index Size (includes TOAST). |
+| **Many2many Tables Size** | Disk usage of related many2many junction tables, including their indexes. To avoid double-counting, each junction table is attributed to the model with the larger row count. |
+| **Total Database Size** | Total Table Size + Many2many Tables Size. |
+| **Attachment Size** | Disk usage of `ir.attachment` records linked to this model's records. Files with identical content are deduplicated by checksum so the same physical file is not counted twice for records of the same model. |
+| **Total Model Size** | Total Database Size + Attachment Size. |
+| **Estimated Rows** | Row count from the PostgreSQL query planner (`pg_class.reltuples`). Faster than `COUNT(*)` but may be slightly imprecise. |
+
+Individual records also expose the sizes of each index and each many2many table as child records, accessible by clicking into the measurement.
+
+## Where to find the view
+
+<Steps>
+  <Step title="Enable developer mode">
+    The Database Size menu is only visible in debug mode. Go to **Settings → General Settings → Developer Tools** and click **Activate the developer mode**, or append `?debug=1` to the URL.
+  </Step>
+  <Step title="Open the Database Size list">
+    Navigate to **Settings → Technical → Database Size**. The list is sorted by measurement date (newest first) and then by total model size descending, so the largest models appear at the top of each day's group.
+  </Step>
+  <Step title="Compare sizes across dates">
+    Open the **Compare Size per Model** report view. It shows each model's metrics for two dates side by side: the selected measurement date (defaults to today) and a comparison date (defaults to one month ago). Type a date into the search bar to switch to any date for which a snapshot exists.
+  </Step>
+</Steps>
+
+## Configuration
+
+<Steps>
+  <Step title="Review the scheduled action">
+    Go to **Settings → Technical → Automation → Scheduled Actions** and find **Take model size measurements**. Verify the scheduled time. The action is designed to run once per day — if it runs more often it simply overwrites the existing snapshot for that day.
+  </Step>
+  <Step title="Configure retention (optional)">
+    Open **Settings → General Settings** and scroll to the **Database Size** section. Enable **Purge Older Model Size Measurements** and set the retention windows:
+
+    | Setting | Default | Behaviour |
+    |---|---|---|
+    | **Keep Daily Measurements for** | 366 days | Deletes per-day snapshots older than this threshold, except for the first day of each month. |
+    | **Keep Monthly Measurements for** | 0 (forever) | Deletes first-of-month snapshots older than this threshold. Must be greater than the daily retention value to take effect. |
+
+    Retention is applied automatically via PostgreSQL's autovacuum hook (`@api.autovacuum`) — no additional cron job is needed.
+  </Step>
+</Steps>
+
+<Info>
+The `database_size.purge_enable` system parameter must be set to a truthy value for retention to be active. Enabling **Purge Older Model Size Measurements** in the General Settings writes this parameter automatically.
+</Info>
+
+## How sizes are collected
+
+The measurement is driven by direct SQL queries against PostgreSQL system catalogs:
+
+- `pg_class` and `pg_namespace` for table and relation sizes via `pg_total_relation_size()` and `pg_relation_size()`.
+- `pg_stat_all_indexes` for per-index sizes via `pg_relation_size(indexrelid)`.
+- `ir_attachment` with a `row_number() OVER (PARTITION BY checksum)` window function for deduplicated attachment sizes.
+- `ir_model_relation` to identify many2many junction tables and associate them with the correct model.
+
+All size values are normalised to megabytes by dividing bytes by `1024 * 1024`. Values reported as `-1` by PostgreSQL (tables with no statistics yet) are treated as `0`.

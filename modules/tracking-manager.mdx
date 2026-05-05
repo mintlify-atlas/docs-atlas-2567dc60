@@ -1,0 +1,85 @@
+---
+title: "Tracking Manager: field-level change history in Odoo"
+description: "Extend Odoo's native chatter tracking to cover one2many and many2many fields on any model, with per-field and per-model configuration."
+---
+
+The Tracking Manager module (`tracking_manager`) extends Odoo's built-in field tracking to support field types that native tracking cannot handle: `one2many` and `many2many` fields, as well as line-level changes inside a one2many (for example, tracking quantity changes on individual sale order lines). Change history appears in the standard Odoo chatter, so no new UI is introduced.
+
+## How it differs from native Odoo tracking
+
+Odoo's native `tracking` attribute on a field records changes for simple scalar and many2one fields on a model that inherits `mail.thread`. It cannot track:
+
+- `one2many` fields (e.g. `order_line` on `sale.order`)
+- `many2many` fields (e.g. `tag_ids` on `res.partner`)
+- Field changes on the lines themselves, surfaced as a message on the parent record
+
+Tracking Manager adds three Boolean fields to `ir.model.fields`:
+
+| Field | Description |
+|---|---|
+| `native_tracking` | Computed from the field's existing `tracking` attribute. Read-only. |
+| `custom_tracking` | Set by Tracking Manager. When `True` the field is included in custom tracking. |
+| `trackable` | Computed flag. `True` when the field is stored, not related, and not in the internal blacklist (`activity_ids`, `message_ids`, etc.). |
+
+## Enabling tracking on a model
+
+<Steps>
+  <Step title="Open the model configuration">
+    Go to **Settings → Technical → Database Structure → Models** (or navigate to **Settings → Models** depending on your menu configuration). Find and open the model you want to track.
+  </Step>
+  <Step title="Activate custom tracking">
+    Check the **Active** checkbox under the **Custom Tracking** section. This sets `active_custom_tracking = True` on the `ir.model` record and clears the registry cache so the new configuration takes effect immediately.
+  </Step>
+  <Step title="Choose a configuration method">
+    Two approaches are available:
+
+    **Option A — Manual field selection**
+
+    Click the **Tracked Fields** smart button. A list of all `trackable` fields for the model opens. Toggle **Custom Tracking** on each field you want to include.
+
+    **Option B — Automatic domain-based selection**
+
+    Enable **Automatic configuration** on the model form, then set the **Domain** field to a filter expression that selects the fields to track. Click **Update** to apply the domain. All `ir.model.fields` records that match the domain will have `custom_tracking` set to `True`; all others will have it set to `False`.
+  </Step>
+</Steps>
+
+<Note>
+When **Automatic configuration** is off, `custom_tracking` initialises from the field's existing `native_tracking` value, so any fields already tracked natively are preserved.
+</Note>
+
+## Default automatic domains
+
+When automatic configuration is enabled, the module ships default domain rules for several common models:
+
+```python
+# sale.order — includes order_line (one2many) and all non-readonly, non-o2m fields
+[("readonly", "=", False), "|", ("ttype", "!=", "one2many"), ("name", "in", ["order_line"])]
+
+# account.move — includes invoice_line_ids (one2many)
+[("readonly", "=", False), "|", ("ttype", "!=", "one2many"), ("name", "in", ["invoice_line_ids"])]
+
+# product.product — includes barcode_ids (one2many)
+[("readonly", "=", False), "|", ("ttype", "!=", "one2many"), ("name", "in", ["barcode_ids"])]
+
+# all other models (default_automatic_rule)
+[("ttype", "!=", "one2many"), ("readonly", "=", False)]
+```
+
+You can override the domain after enabling automatic configuration.
+
+## How one2many tracking works
+
+When a `one2many` field is marked with `custom_tracking`, the module tracks the related model indirectly:
+
+1. Before a `write` on a line record, the module snapshots the current values of all trackable fields on that line.
+2. After the write, it computes the diff and calls `_tm_notify_owner` to stage a message on the parent record (found via the inverse field).
+3. On `create` and `unlink` of a line, a create/delete event is staged.
+4. All staged messages are posted in a single `precommit` hook at the end of the transaction using the `tracking_manager.track_o2m_m2m_template` QWeb template.
+
+## Where change history appears
+
+All tracked changes appear in the **chatter** of the record in the standard Odoo message thread. One2many line changes appear on the parent record (e.g. a quantity change on a sale order line appears on the sale order). Many2many changes appear on the record that owns the field.
+
+<Note>
+The module also patches `mail.tracking.value` to handle field types that Odoo 18 does not yet support natively in the chatter: `html` (converted to plain text), `properties`, and `tags`.
+</Note>

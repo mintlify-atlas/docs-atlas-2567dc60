@@ -1,0 +1,63 @@
+---
+title: "OCA Server Tools: Odoo Admin & Developer Addons"
+description: "OCA Server Tools addons extend Odoo with database backups, audit logs, module management, error monitoring, and developer utilities for administrators."
+---
+
+OCA Server Tools is a collection of open-source Odoo addons maintained by the [Odoo Community Association (OCA)](https://odoo-community.org/). Whether you need automated database backups, detailed audit trails, module lifecycle management, or deeper developer utilities, this repository provides battle-tested modules that extend Odoo's built-in capabilities.
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install any Server Tools addon into your Odoo instance in minutes
+  </Card>
+  <Card title="Database & Backup" icon="database" href="/modules/auto-backup">
+    Automated backups, database cleanup, size monitoring, and vacuuming
+  </Card>
+  <Card title="Audit & Tracking" icon="magnifying-glass" href="/modules/auditlog">
+    Full audit logging and field-level change tracking across all models
+  </Card>
+  <Card title="Module Management" icon="puzzle-piece" href="/modules/module-auto-update">
+    Auto-update, analysis, and upgrade tools for Odoo modules
+  </Card>
+  <Card title="Error Monitoring" icon="bell" href="/modules/sentry">
+    Sentry integration, exception rules, and scheduler error notifications
+  </Card>
+  <Card title="Developer Tools" icon="code" href="/modules/jsonifier">
+    JSONifier, onchange helpers, fuzzy search, RPC helpers, and more
+  </Card>
+</CardGroup>
+
+## What's included
+
+OCA Server Tools covers seven functional areas, each with one or more installable Odoo addons:
+
+<AccordionGroup>
+  <Accordion title="Database & Backup">
+    Protect your data with automated local and remote backups, clean up orphaned schema remnants, monitor database size, and tune PostgreSQL autovacuum settings — all from inside Odoo.
+  </Accordion>
+  <Accordion title="Audit & Tracking">
+    The `auditlog` addon records every create, read, write, and delete across chosen models. `tracking_manager` extends Odoo's native tracking to cover one2many and many2many fields with optional domain-based filtering.
+  </Accordion>
+  <Accordion title="Module Management">
+    Keep modules up to date automatically with `module_auto_update`, analyze installed module origins with `module_analysis`, and compare module states across Odoo instances using `upgrade_analysis`.
+  </Accordion>
+  <Accordion title="Attachments & Files">
+    Queue and process file uploads asynchronously, synchronize attachments to remote storage, restrict attachment deletion, and build Excel import/export flows.
+  </Accordion>
+  <Accordion title="Error Handling & Monitoring">
+    Route Odoo errors to Sentry, define custom validation exceptions on any model, receive email alerts on scheduler failures, and notify senders when inbound mail processing fails.
+  </Accordion>
+  <Accordion title="Developer Tools">
+    Serialize any ORM recordset to JSON with a flexible parser, invoke onchange handlers programmatically, disable RPC endpoints, add PostgreSQL trigram-based fuzzy search, and use Python expressions for sequences.
+  </Accordion>
+  <Accordion title="Server & UI Extensions">
+    Filter databases by HTTP header, store sessions in the database, integrate with PgBouncer, add FontAwesome icons, support multiple images per record, and extend view inheritance operators.
+  </Accordion>
+</AccordionGroup>
+
+## License
+
+All modules are licensed under [AGPL-3.0](https://github.com/OCA/server-tools/blob/18.0/LICENSE) unless a module's `__manifest__.py` specifies otherwise (some modules use LGPL-3.0).
+
+<Note>
+  OCA Server Tools targets **Odoo 18.0**. The `18.0` branch of the repository is the current stable branch.
+</Note>

@@ -1,0 +1,82 @@
+---
+title: "Database Autovacuum Tuning for Odoo performance"
+description: "Override PostgreSQL's default autovacuum scale factors with absolute row thresholds so large, busy Odoo tables are vacuumed before bloat degrades query speed."
+---
+
+The `database_autovacuum_tuning` module (v18.0.1.0.1, Alpha) addresses a well-known PostgreSQL tuning problem: the default autovacuum configuration uses percentage-based scale factors (e.g. vacuum a table when 20% of its rows are dead tuples). On a small table this is sensible, but on a large Odoo table with millions of rows the threshold can grow to hundreds of thousands of dead tuples before vacuum runs — causing table bloat, index bloat, and degraded query performance.
+
+This module lets you set an absolute dead-tuple ceiling. Once a table's dead-tuple count exceeds the configured vacuum threshold, a scheduled action rewrites that table's storage parameters to use `autovacuum_vacuum_scale_factor = 0` and a fixed `autovacuum_vacuum_threshold`, overriding the server-wide defaults for that specific table.
+
+<Note>
+This module is most useful for PostgreSQL 17 and earlier. PostgreSQL 18.0 introduces the native `autovacuum_vacuum_max_threshold` parameter, which provides equivalent functionality without a separate tool.
+</Note>
+
+<Warning>
+The `pgstattuple` extension must be installed on the PostgreSQL database before installing this module. Install it with `CREATE EXTENSION pgstattuple;` as a database superuser.
+</Warning>
+
+## How it works
+
+A daily cron job calls `DatabaseAutovacuumTuning._db_autovacuum_tune()`. That method:
+
+1. Reads the configured vacuum and analyze thresholds from system parameters.
+2. Queries `pg_tables` joined with `pg_stat_all_tables` to find tables in the `public` schema owned by the current database user whose `n_dead_tup` (dead tuple count) exceeds the vacuum threshold.
+3. For each qualifying table, executes:
+
+```sql
+ALTER TABLE {schemaname}.{tablename} SET (
+    autovacuum_vacuum_scale_factor = 0,
+    autovacuum_vacuum_threshold = <vacuum_threshold>,
+    autovacuum_analyze_scale_factor = 0,
+    autovacuum_analyze_threshold = <analyze_threshold>
+)
+```
+
+4. Creates a `database.autovacuum.tuning` record logging the table name and the thresholds that were applied.
+
+Setting `autovacuum_vacuum_scale_factor = 0` means PostgreSQL ignores the percentage-based rule entirely for that table and relies solely on the absolute threshold. This ensures autovacuum fires promptly regardless of table size.
+
+## Configuration
+
+<Steps>
+  <Step title="Install the pgstattuple extension">
+    Connect to the Odoo PostgreSQL database as a superuser and run:
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pgstattuple;
+    ```
+  </Step>
+  <Step title="Install the module">
+    Install `database_autovacuum_tuning` through the Odoo Apps menu or via the command line.
+  </Step>
+  <Step title="Set the thresholds in General Settings">
+    Navigate to **Settings → General Settings** and locate the **Database Autovacuum Tuning** section. Set the two threshold values:
+
+    | Parameter | System parameter key | Description |
+    |---|---|---|
+    | **Vacuum Max Threshold** | `database_autovacuum_tuning.autovacuum_vacuum_max_threshold` | Tables with more dead tuples than this will have autovacuum tuned. Set to `0` to disable the scheduled check entirely. |
+    | **Analyze Max Threshold** | `database_autovacuum_tuning.autovacuum_vacuum_analyze_max_threshold` | The `autovacuum_analyze_threshold` value applied to qualifying tables. |
+
+    You can also set these directly under **Settings → Technical → Parameters → System Parameters**.
+  </Step>
+  <Step title="Review the scheduled action">
+    Go to **Settings → Technical → Automation → Scheduled Actions** and find the autovacuum tuning cron job. The action runs daily by default. You can adjust the schedule or trigger it manually from the list.
+  </Step>
+  <Step title="Inspect tuned tables">
+    Navigate to **Settings → Technical → Database Structure → Database Autovacuum Tuning** to see which tables have been tuned, along with the thresholds that were applied to each.
+  </Step>
+</Steps>
+
+## PostgreSQL autovacuum context
+
+PostgreSQL runs autovacuum automatically based on two global settings:
+
+- `autovacuum_vacuum_scale_factor` (default 0.2) — triggers vacuum when dead tuples exceed 20% of the table's live row count.
+- `autovacuum_vacuum_threshold` (default 50) — a minimum baseline added to the scaled factor.
+
+The effective trigger point is: `autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × live_row_count`.
+
+For a table with 10 million rows this evaluates to roughly 2 million dead tuples before vacuum kicks in — far too high for heavily updated tables like `mail.message`, `stock.move.line`, or `account.move.line`. This module solves the problem by applying per-table overrides that use a fixed row count instead of a percentage, keeping those tables lean regardless of their total size.
+
+<Tip>
+A reasonable starting point for `autovacuum_vacuum_max_threshold` on a busy Odoo database is between 10,000 and 50,000 rows. Monitor the `database.autovacuum.tuning` records after the first few cron runs to see which tables are being tuned, and adjust the threshold downward if you want more aggressive vacuuming on smaller tables.
+</Tip>

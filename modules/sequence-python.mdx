@@ -1,0 +1,79 @@
+---
+title: "Sequence Python: dynamic sequences from expressions"
+description: "Compute Odoo sequence values from Python expressions. Use built-in variables like the sequence number, random, uuid, and string to generate custom identifiers."
+---
+
+The **Sequence Python** module extends Odoo's standard `ir.sequence` model with a Python expression mode. Instead of relying solely on the built-in prefix/suffix/padding format, you can write a Python expression that receives the next sequence number and any other provided variables, and returns whatever string you need as the sequence value.
+
+## Enabling Python mode on a sequence
+
+<Steps>
+  <Step title="Open the sequence form">
+    Go to the sequence you want to modify. In Odoo, sequences are found under **Settings → Technical → Sequences & Identifiers → Sequences**.
+  </Step>
+  <Step title="Switch to the Python tab">
+    On the sequence form view, open the **Python** tab.
+  </Step>
+  <Step title="Enable Use Python">
+    Check the **Use Python** checkbox. The **Python expression** field becomes active.
+  </Step>
+  <Step title="Write your expression">
+    Replace the default expression (`number_padded`) with any valid Python expression that evaluates to a string.
+  </Step>
+</Steps>
+
+## Fields added to `ir.sequence`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `use_python_code` | `Boolean` | `False` | Activates Python expression mode |
+| `python_code` | `Text` | `number_padded` | The Python expression to evaluate |
+| `python_code_preview` | `Char` (computed) | — | Live preview of the expression result using the current sequence number |
+
+## Available variables in the expression context
+
+The following variables are available when the expression is evaluated:
+
+| Variable | Type | Description |
+|---|---|---|
+| `number` | `int` | The raw next number in the sequence |
+| `number_padded` | `str` | The next number zero-padded to the sequence's configured padding width |
+| `sequence` | `ir.sequence` | The sequence record itself |
+| `random` | module | Safe-wrapped `random` module |
+| `uuid` | module | Safe-wrapped `uuid` module |
+| `string` | module | Safe-wrapped `string` module |
+
+The expression is evaluated with `safe_eval`, so arbitrary imports and dangerous calls are blocked.
+
+<Tip>
+  You can expose additional variables by inheriting `_get_python_eval_context` in your own module and adding entries to the returned dict.
+</Tip>
+
+## Expression examples
+
+<CodeGroup>
+
+```python hyphen-separated digits
+# Format the padded number as hyphen-separated individual digits
+# e.g. 00001 → 0-0-0-0-1
+'-'.join(number_padded)
+```
+
+```python uuid
+# Use a UUID as the sequence value
+uuid.uuid4().hex
+```
+
+```python binary representation
+# 8-digit binary number offset by 300
+'{0:#010b}'.format(number + 300)[2:]
+```
+
+```python alphanumeric obfuscation
+# Prevent customers from inferring their position in the sequence
+str(number * 7 + 1000)
+```
+
+</CodeGroup>
+
+The sequence's configured prefix and suffix are still applied around the Python expression result, so you can combine a static prefix with a dynamically generated body.

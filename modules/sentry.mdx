@@ -1,0 +1,136 @@
+---
+title: "Sentry integration for Odoo error monitoring"
+description: "Route Odoo server errors and log events to Sentry for centralized error tracking, alerting, and context-rich debugging across environments."
+---
+
+The `sentry` module integrates Odoo with [Sentry](https://sentry.io/) using the official `sentry-sdk` Python package. It wraps the Odoo WSGI application with Sentry middleware and captures log events at a configurable severity level, sending them to your Sentry project along with request context, user info, and sanitized cookies.
+
+## Installation
+
+<Steps>
+  <Step title="Install the Python package">
+    Install `sentry-sdk` within the version range the module requires:
+
+    ```bash
+    pip install "sentry-sdk>=2.0.0,<=2.22.0"
+    ```
+
+    <Note>
+      The module declares `sentry_sdk>=2.0.0,<=2.22.0` as a hard dependency in `__manifest__.py`. Installing a version outside this range will prevent the module from loading.
+    </Note>
+  </Step>
+
+  <Step title="Add to addons path">
+    Place the `sentry` directory on Odoo's `addons_path` as you would any other OCA module.
+  </Step>
+
+  <Step title="Load as a server-wide module">
+    The module uses a `post_load` hook (`hooks.post_load`) to initialize Sentry before any request is handled. It must be declared as a server-wide module so the hook runs at startup, not just when a database loads the module.
+
+    Add it to your Odoo config file:
+
+    ```ini
+    server_wide_modules = base,web,sentry
+    ```
+
+    Or pass it on the command line:
+
+    ```bash
+    odoo --load=base,web,sentry
+    ```
+  </Step>
+
+  <Step title="Configure Sentry options in odoo.conf">
+    Add your DSN and any other options to the `[options]` section. See the full reference below.
+  </Step>
+
+  <Step title="Restart Odoo">
+    On startup, `initialize_sentry` reads `odoo_config`, initializes the `sentry_sdk` client, wraps `odoo.http.Application` and the running server app with `SentryWsgiMiddleware`, and sends an `"info"`-level `"Starting Odoo Server"` message to confirm connectivity.
+  </Step>
+</Steps>
+
+## Configuration
+
+All options are set in the `[options]` section of your `odoo.conf` file using the `sentry_` prefix.
+
+### Example configuration
+
+```ini
+[options]
+sentry_dsn = https://<public_key>:<secret_key>@sentry.example.com/<project id>
+sentry_enabled = true
+sentry_logging_level = warn
+sentry_exclude_loggers = werkzeug
+sentry_ignore_exceptions = odoo.exceptions.AccessDenied,
+    odoo.exceptions.AccessError,odoo.exceptions.MissingError,
+    odoo.exceptions.RedirectWarning,odoo.exceptions.UserError,
+    odoo.exceptions.ValidationError,odoo.exceptions.Warning,
+    odoo.exceptions.except_orm
+sentry_include_context = true
+sentry_environment = production
+sentry_release = 1.3.2
+sentry_odoo_dir = /home/odoo/odoo/
+```
+
+### Option reference
+
+| Option | Default | Description |
+|---|---|---|
+| `sentry_enabled` | `false` | Set to `true` to activate Sentry reporting. Nothing is sent while this is `false`. |
+| `sentry_dsn` | `""` | Your Sentry project DSN. Required for events to be delivered. |
+| `sentry_logging_level` | `warn` | Minimum Odoo log level that triggers a Sentry event. Accepted values: `critical`, `error`, `warn`, `info`, `debug`, `notset`. |
+| `sentry_exclude_loggers` | `werkzeug` | Comma-separated list of logger names to silence in Sentry. |
+| `sentry_ignore_exceptions` | Odoo user exceptions (see below) | Comma-separated list of fully-qualified exception class names that are never forwarded to Sentry. |
+| `sentry_include_context` | `true` | When `true`, attaches the current database name, user email/id, session context, and sanitized request data to each event. |
+| `sentry_environment` | `develop` | Sentry environment tag (e.g. `production`, `staging`). |
+| `sentry_release` | git SHA of `sentry_odoo_dir` | Release string attached to events. If both `sentry_odoo_dir` and `sentry_release` are set, `sentry_release` takes precedence. |
+| `sentry_odoo_dir` | — | Path to the Odoo source directory. Used to derive the release from the git commit SHA when `sentry_release` is not set. |
+| `sentry_include_local_variables` | SDK default | Include local variables in stack frames. |
+| `sentry_max_breadcrumbs` | SDK default | Maximum number of breadcrumbs kept per event. |
+| `sentry_server_name` | SDK default | Override the server name tag on events. |
+| `sentry_shutdown_timeout` | SDK default | Seconds to wait for pending events on shutdown. |
+| `sentry_in_app_include` | SDK default | Comma-separated list of module prefixes treated as in-app code. |
+| `sentry_in_app_exclude` | SDK default | Comma-separated list of module prefixes excluded from in-app frames. |
+| `sentry_default_integrations` | SDK default | Whether to enable Sentry's default integrations. |
+| `sentry_dist` | SDK default | Distribution identifier for the release. |
+| `sentry_sample_rate` | SDK default | Float between `0.0` and `1.0` controlling error event sampling. |
+| `sentry_send_default_pii` | SDK default | Whether to send personally identifiable information by default. |
+| `sentry_http_proxy` | SDK default | HTTP proxy URL for Sentry transport. |
+| `sentry_https_proxy` | SDK default | HTTPS proxy URL for Sentry transport. |
+| `sentry_max_request_body_size` | SDK default | Maximum request body size to capture (`never`, `small`, `medium`, `always`). |
+| `sentry_max_value_length` | SDK default | Maximum string length before truncation. |
+| `sentry_attach_stacktrace` | SDK default | Attach stack traces to all captured messages. |
+| `sentry_ca_certs` | SDK default | Path to a CA bundle file for TLS verification. |
+| `sentry_propagate_traces` | SDK default | Whether to propagate trace headers to outgoing requests. |
+| `sentry_traces_sample_rate` | SDK default | Float for performance monitoring sampling (0.0–1.0). |
+
+### Default ignored exceptions
+
+The following Odoo exceptions are ignored by default and are not forwarded to Sentry. They represent expected user-facing errors rather than bugs:
+
+```
+odoo.exceptions.AccessDenied
+odoo.exceptions.AccessError
+odoo.exceptions.DeferredException
+odoo.exceptions.MissingError
+odoo.exceptions.RedirectWarning
+odoo.exceptions.UserError
+odoo.exceptions.ValidationError
+odoo.exceptions.Warning
+odoo.exceptions.except_orm
+```
+
+Override this list with `sentry_ignore_exceptions` in your config file.
+
+## How it works
+
+The `post_load` hook in `hooks.py` calls `initialize_sentry(odoo_config)` immediately when the module is loaded at server startup. This function:
+
+1. Reads all `sentry_*` keys from `odoo_config` and maps them to `sentry_sdk.init()` arguments.
+2. Creates a `LoggingIntegration` at the configured `sentry_logging_level` and adds `ThreadingIntegration` for multi-threaded environments.
+3. Wraps both `odoo.http.Application` and the already-running server app with `SentryWsgiMiddleware` to capture WSGI-level errors.
+4. Registers a `before_send` callback that optionally enriches events with request context (`database`, `user`, `session context`, `HTTP request info`) and scrubs sensitive data using `SanitizeOdooCookiesProcessor` and `SanitizePasswordsProcessor`. Keys such as `password`, `secret`, `passwd`, `authorization`, `api_key`, `sentry_dsn`, and `session_id` are masked before any data leaves the server.
+
+<Note>
+  Because initialization happens in `post_load` (before any database is loaded), the module must be in `server_wide_modules`. Installing it only as a regular addon will not activate Sentry reporting.
+</Note>

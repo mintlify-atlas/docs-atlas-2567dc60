@@ -1,0 +1,71 @@
+---
+title: "Notify sender when inbound email processing fails"
+description: "Automatically send a bounce notification back to the original sender when Odoo's fetchmail server cannot route or process an incoming email."
+---
+
+When Odoo receives an email via fetchmail and cannot route it—for example, because the recipient address does not match any configured alias—the error is logged silently on the server and the original sender receives no feedback. The `fetchmail_notify_error_to_sender` module extends this behavior so that the sender automatically receives a notification email when their message could not be processed.
+
+## How it works
+
+The module overrides `mail.thread.message_route()`, which is the method Odoo calls to determine how an incoming message should be dispatched. If `message_route()` raises a `ValueError` (the standard exception for unroutable messages), the override:
+
+1. Checks whether the current fetchmail server has an **Error notice template** configured.
+2. If it does, calls `error_notice_template_id.send_mail(fetchmail_server.id)` to notify the original sender.
+3. Re-raises the original `ValueError` so Odoo's standard error handling still applies.
+
+The original message and the routing exception are passed to the template rendering context via `sender_message` and `route_exception` on the fetchmail server's context.
+
+```python
+# From models/mail_thread.py
+try:
+    res = super().message_route(...)
+except ValueError as ve:
+    fetchmail_server_id = self.env.context.get("default_fetchmail_server_id")
+    if not fetchmail_server_id:
+        raise ve
+    fetchmail_server = (
+        self.env["fetchmail.server"]
+        .with_context(sender_message=message, route_exception=ve)
+        .browse(fetchmail_server_id)
+    )
+    if not fetchmail_server.error_notice_template_id:
+        raise ve
+    fetchmail_server.error_notice_template_id.send_mail(fetchmail_server.id)
+    raise ve
+```
+
+<Note>
+  No notification is sent if the `ValueError` occurs outside of a fetchmail fetch (i.e., `default_fetchmail_server_id` is not in context), or if the fetchmail server has no error notice template configured. The exception propagates normally in both cases.
+</Note>
+
+## Configuration
+
+<Steps>
+  <Step title="Open your fetchmail server">
+    Go to **Settings → Technical → Email → Incoming Mail Servers** and open the server you want to configure.
+  </Step>
+
+  <Step title="Set the error notice template">
+    In the **Error notice template** field, select **Fetchmail - error notice**. This is the default template bundled with the module.
+
+    You can edit the **Fetchmail - error notice** template under **Email → Templates** to customize the subject, body, and sender according to your needs.
+  </Step>
+
+  <Step title="Save">
+    Save the fetchmail server configuration. The next time a routing error occurs for an email fetched by this server, the notification is sent automatically.
+  </Step>
+</Steps>
+
+## Field added to `fetchmail.server`
+
+| Field | Type | Description |
+|---|---|---|
+| `error_notice_template_id` | `Many2one` → `mail.template` | The email template used to notify senders when their message cannot be routed. Leave empty to disable notifications for this server. |
+
+## Common use case
+
+If you configure Odoo to route incoming emails by recipient alias (e.g., `support@example.com` → helpdesk, `sales@example.com` → CRM), a user who sends to an unrecognized address like `info@example.com` would otherwise receive no indication that their message was lost. With this module, they receive a clear bounce notification based on your configured template.
+
+<Tip>
+  The bundled **Fetchmail - error notice** template has access to `object` (the `fetchmail.server` record), `context['sender_message']` (the raw incoming email), and `context['route_exception']` (the routing error). You can reference these in the template body to provide the sender with specific details about why their message could not be delivered.
+</Tip>

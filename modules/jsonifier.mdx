@@ -1,0 +1,172 @@
+---
+title: "JSONifier: serialize any Odoo model to JSON"
+description: "Add a jsonify() method to every Odoo ORM model. Define a parser to extract fields, rename keys, traverse relations, and apply custom transformations."
+---
+
+The **JSONifier** module extends every Odoo model with a `jsonify()` method that converts a recordset into a list of plain Python dictionaries ready to serialize as JSON. You supply a parser that describes which fields to extract, how to rename them, and how to handle relational fields and custom transformations.
+
+<Note>
+  This module was named **base_jsonify** up to and including version 14.0.1.5.0. If you are upgrading from an older Odoo instance, update your module dependency from `base_jsonify` to `jsonifier`.
+</Note>
+
+## Simple parser
+
+A simple parser is a list. Each entry is either a field name string or a tuple pairing a relational field with its own sub-parser.
+
+```python simple parser
+parser = [
+    'name',
+    'number',
+    'create_date',
+    ('partner_id', ['id', 'display_name', 'ref']),
+    ('line_id', ['id', ('product_id', ['name']), 'price_unit']),
+]
+
+records.jsonify(parser)
+# Returns a list of dicts, one per record
+```
+
+`jsonify()` always returns a list even when the recordset contains a single record, keeping behavior consistent with the standard Odoo API. Pass `one=True` to unwrap the single result.
+
+## Field renaming with colon syntax
+
+Use `field_name:json_key` to give a field a different name in the output dictionary.
+
+```python field renaming
+parser = [
+    'name',
+    'number',
+    'create_date:creationDate',
+    ('partner_id:partners', ['id', 'display_name', 'ref']),
+    ('line_id:lines', ['id', ('product_id', ['name']), 'price_unit']),
+]
+```
+
+## Callable and method-based transformations
+
+Pass a callable or the name of a method on the model to control how a field value is produced.
+
+```python custom transformations
+parser = [
+    ('name', 'jsonify_name'),                          # method on the model
+    ('number', lambda rec, field_name: rec[field_name] * 2),  # inline callable
+]
+```
+
+If the string matches a method name on the record, that method is called with `field_name` as its argument. If it does not match any method, the callable form is used instead.
+
+## Built-in helper methods
+
+The module ships three convenience instance methods you can reference by name in a parser:
+
+| Method | Description |
+|---|---|
+| `_jsonify_m2o_to_id` | Returns only the database ID of a many2one field |
+| `_jsonify_x2m_to_ids` | Returns a list of IDs from a one2many or many2many field |
+| `_jsonify_format_duration` | Formats a float duration field as `HH:MM` |
+
+## Full parser with resolvers and language support
+
+For advanced use cases—custom field transformations, per-language exports, and post-processing of the output dictionary—use the full parser format.
+
+```python full parser with languages
+parser = {
+    "resolver": 3,           # global ir.exports.resolver id
+    "language_agnostic": True,
+    "langs": {
+        False: [
+            {'name': 'description'},
+            {'name': 'number', 'resolver': 5},
+            ({'name': 'partner_id', 'target': 'partner'}, [{'name': 'display_name'}]),
+        ],
+        'fr_FR': [
+            {'name': 'description', 'target': 'description_fr'},
+            ({'name': 'partner_id', 'target': 'partner'}, [{'name': 'description', 'target': 'description_fr'}]),
+        ],
+    },
+}
+```
+
+Translated fields from each language are merged into the same output dictionary:
+
+```python expected output
+{
+    "description": "English description",
+    "description_fr": "French description, voilà",
+    "number": 42,
+    "partner": {
+        "display_name": "partner name",
+        "description_fr": "French description of that partner",
+    },
+}
+```
+
+When you only need resolvers but not multi-language output, use `fields` instead of `langs`:
+
+```python full parser with fields key
+parser = {
+    "resolver": 3,
+    "fields": [
+        {'name': 'description'},
+        {'name': 'number', 'resolver': 5},
+        ({'name': 'partner_id', 'target': 'partners'}, [{'name': 'display_name'}]),
+    ],
+}
+```
+
+## List marshaller for grouped output
+
+End a `target` value with `=list` to collect multiple fields into a single list in the output:
+
+```python list marshaller
+parser = {
+    "fields": [
+        {'name': 'name'},
+        {'name': 'field_1', 'target': 'customTags=list'},
+        {'name': 'field_2', 'target': 'customTags=list'},
+    ],
+}
+
+# Result:
+# {
+#     'name': 'record_name',
+#     'customTags': ['field_1_value', 'field_2_value'],
+# }
+```
+
+## Resolvers (`ir.exports.resolver`)
+
+A resolver is a small piece of Python code stored in the `ir.exports.resolver` model. There are two resolver types:
+
+- **Field resolver** — runs once per record for a single field. Available variables: `record`, `name`, `value`, `field_type`, `context`. Set `result` to the final value.
+- **Global resolver** — runs on the full output dict after all fields are processed. Available variables: `value` (the JSON dict), `record`, `context`. Set `result` to the transformed dict.
+
+Either resolver type can override the JSON key by returning `{'_value': value, '_json_key': new_key}`.
+
+Resolvers can be passed as an `ir.exports.resolver` recordset or as an integer ID (the ID form is used in cached parsers).
+
+## Generating a parser from `ir.exports`
+
+The module adds a `get_json_parser()` method to `ir.exports`. It reads the export's lines and produces a full parser dict that you can pass directly to `jsonify()`.
+
+```python ir.exports-based parser
+export = self.env['ir.exports'].browse(export_id)
+parser = export.get_json_parser()
+records.jsonify(parser)
+```
+
+`get_json_parser()` is cached via `ormcache` keyed on `language_agnostic`, `global_resolver_id`, and the `write_date` of every export line, so repeated calls are cheap.
+
+### `ir.exports.line` fields added by this module
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Char` | Alternative output path; supports `field:target` syntax |
+| `active` | `Boolean` | Exclude a line from the parser without deleting it |
+| `lang_id` | `Many2one` (`res.lang`) | Language in which to export this field |
+| `resolver_id` | `Many2one` (`ir.exports.resolver`) | Per-field resolver |
+| `instance_method_name` | `Char` | Name of a method on the model to call for this field |
+
+<Info>
+  You cannot set both `resolver_id` and `instance_method_name` on the same export line. A validation constraint enforces this.
+</Info>

@@ -1,0 +1,100 @@
+---
+title: "View Inheritance Extension: extra operators for Odoo XML"
+description: "Adds update, text_add, and domain_add operations to Odoo XML view inheritance, enabling precise attribute edits without overwriting existing values."
+---
+
+The `base_view_inheritance_extension` module adds three new `operation` values for the `<attribute>` element used in Odoo XML view inheritance. Instead of replacing an attribute entirely, you can merge a dictionary, prepend/append text, or compose domains—all without touching the original view definition.
+
+## New operators
+
+Standard Odoo view inheritance lets you set attribute values with `position="attributes"`. This module extends that pattern with an `operation` attribute on each `<attribute>` child node.
+
+<AccordionGroup>
+  <Accordion title="update — merge a Python dictionary">
+    Merges the given dictionary into the current attribute value. Keys present in both are overwritten; new keys are added. Existing keys not mentioned are preserved.
+
+    ```xml
+    <field position="attributes">
+        <attribute name="context" operation="update">
+            {
+                "key": "value",
+            }
+        </attribute>
+    </field>
+    ```
+
+    <Note>
+      Views undergo xmlid evaluation, so you can reference xmlids using the standard `%(xmlid)s` syntax inside the dictionary value.
+    </Note>
+  </Accordion>
+
+  <Accordion title="text_add — prepend or append text">
+    Wraps the existing attribute value with arbitrary text. Use the `{old_value}` placeholder to embed the original content.
+
+    ```xml
+    <field position="attributes">
+        <attribute name="string" operation="text_add">
+            My Prefix: {old_value} (suffix)
+        </attribute>
+    </field>
+    ```
+
+    If the attribute does not exist yet, `{old_value}` resolves to an empty string.
+  </Accordion>
+
+  <Accordion title="domain_add — compose Odoo domains">
+    Merges an additional domain clause into an existing domain attribute using AND (default) or OR logic. An optional `condition` field makes the merge conditional at render time.
+
+    ```xml
+    <field position="attributes">
+        <attribute
+            name="domain"
+            operation="domain_add"
+            condition="some_field_condition"
+            join_operator="OR"
+        >
+            [('active', '=', True)]
+        </attribute>
+    </field>
+    ```
+
+    | Attribute | Required | Description |
+    |---|---|---|
+    | `name` | Yes | The XML attribute to modify. |
+    | `operation` | Yes | Must be `domain_add`. |
+    | `join_operator` | No | `AND` (default) or `OR`. |
+    | `condition` | No | Python expression; the new domain is only applied when truthy. |
+  </Accordion>
+</AccordionGroup>
+
+## How it works
+
+The module overrides `ir.ui.view.apply_inheritance_specs` in `models/ir_ui_view.py`. When iterating inheritance specs it inspects each `<attribute>` child for an `operation` attribute. If one is found, a dedicated handler (`_inheritance_handler_attributes_update`, `_inheritance_handler_attributes_text_add`, or `_inheritance_handler_attributes_domain_add`) is dispatched instead of the default Odoo replacement logic. Specs without an `operation` attribute fall through to the standard Odoo handler unchanged.
+
+## Use cases
+
+<Steps>
+  <Step title="Extend a context without overwriting it">
+    A third-party module sets `context="{'default_type': 'out_invoice'}"` on a field. Your module needs to add `{'search_default_customer': 1}` without removing the existing key. Use `operation="update"`.
+  </Step>
+  <Step title="Append a label suffix">
+    You want to mark a field string as "(required by policy)" across many views without duplicating the original label string in every override. Use `operation="text_add"` with `{old_value} (required by policy)`.
+  </Step>
+  <Step title="Narrow a relational field domain conditionally">
+    A field already filters by company. Your module must also restrict by warehouse when a condition is met. Use `operation="domain_add"` with `condition="warehouse_id"` and `join_operator="AND"`.
+  </Step>
+</Steps>
+
+<Tip>
+  This module is categorized as `Hidden/Dependency`. Install it as a dependency of your own module rather than directly. Declare `base_view_inheritance_extension` in your module's `depends` list.
+</Tip>
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `base_view_inheritance_extension` |
+| Version | 18.0.1.0.2 |
+| License | LGPL-3 |
+| Depends on | `base` |
+| Development status | Mature |

@@ -1,0 +1,70 @@
+---
+title: "Fuzzy Search: PostgreSQL trigram search in Odoo"
+description: "Enable approximate string matching in Odoo search domains using the pg_trgm PostgreSQL extension. Configure GIN or GiST indexes through a dedicated model."
+---
+
+The **Fuzzy Search** module (`base_search_fuzzy`) enables approximate, typo-tolerant text searches in Odoo by leveraging the `pg_trgm` extension built into PostgreSQL. It introduces the `%` search operator for use in ORM domains and a `trgm.index` model for managing trigram indexes on `char` and `text` fields through the Odoo UI or programmatically.
+
+<Warning>
+  This module requires the PostgreSQL `pg_trgm` extension. It does not change the standard Odoo backend search interface—it exposes the fuzzy search capability for use by other addons or custom code.
+</Warning>
+
+## PostgreSQL prerequisites
+
+<Steps>
+  <Step title="Install the PostgreSQL contrib package">
+    On Debian-based distributions, the `pg_trgm` extension ships with the `postgresql-contrib` package.
+
+    ```bash
+    apt-get install postgresql-contrib
+    ```
+  </Step>
+  <Step title="Enable the extension in your database">
+    Either grant your PostgreSQL user `SUPERUSER` rights so the Odoo module can run `CREATE EXTENSION` automatically, or create the extension manually before installing the module:
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    ```
+  </Step>
+</Steps>
+
+When the Odoo module initializes, it checks whether `pg_trgm` is available and attempts to create it if the database user has superuser privileges. The result is logged at the `INFO` level.
+
+## Configuring a trigram index
+
+Go to **Settings → Database Structure → Trigram Index** and create a new record.
+
+The `trgm.index` model has the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `field_id` | `Many2one` (`ir.model.fields`) | The `char` or `text` field to index |
+| `index_name` | `Char` (readonly) | Auto-generated name in the form `fieldname_indextype_idx` |
+| `index_type` | `Selection` | `GIN` (default) or `GiST` |
+
+The index is created in PostgreSQL as soon as the record is saved. The index name is computed automatically; if a name conflict exists on a different table, a numeric suffix is appended. Deleting a `trgm.index` record drops the corresponding PostgreSQL index.
+
+<Info>
+  PostgreSQL documentation recommends GIN indexes as the preferred type for text search. GiST indexes support index scans and are better suited for queries that combine similarity search with range predicates.
+</Info>
+
+## Using the `%` operator in search domains
+
+Once a trigram index exists for a field, use the `%` domain operator to perform a fuzzy match:
+
+```python fuzzy search on res.partner
+partners = self.env['res.partner'].search([('name', '%', 'Jon Smit')])
+# Returns records matching approximately "Jon Smit", such as "John Smith" or "John Smit"
+```
+
+## Adjusting the similarity threshold
+
+The default similarity threshold is `0.3`. Lower values return more (looser) matches; higher values return fewer (stricter) matches. Set it per session with a raw SQL call:
+
+```python lower the threshold for broader matches
+self.env.cr.execute("SELECT set_limit(0.2);")
+```
+
+<Note>
+  The similarity threshold is a session-level setting in PostgreSQL. It resets to the default when the database connection is closed or reused by another session. There is currently no persistent UI control for this value.
+</Note>

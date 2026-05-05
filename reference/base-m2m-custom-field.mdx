@@ -1,0 +1,110 @@
+---
+title: "Many2Many Custom Field: extend m2m behavior in Odoo"
+description: "Many2manyCustom field type with a create_table flag that backs a many2many by a real Odoo model, making the join table queryable and editable in Odoo."
+---
+
+Standard Odoo `Many2many` fields create and own an implicit relational table in the database. This is convenient but means you cannot attach a proper Odoo model to that table, so you cannot build dedicated tree views, apply access rules per row, or query the join table directly with `search()`. `base_m2m_custom_field` adds `Many2manyCustom`, a subclass of `Many2many` with a single extra parameter—`create_table`—that suppresses the automatic table creation and lets a handcrafted model own the table instead.
+
+## The `Many2manyCustom` field
+
+`Many2manyCustom` accepts all the same arguments as `Many2many` plus:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `create_table` | bool | When `False`, Odoo will not create or drop the relational table. Your dedicated model owns the table. Defaults to `True` (behaves like a standard `Many2many`). |
+
+## Use case: editable join table with a dedicated tree view
+
+The primary use case is making a many2many relationship directly editable in a tree view, with extra columns or server actions on each relationship row.
+
+<Steps>
+  <Step title="Declare the two models with Many2manyCustom">
+    Use the same relational table name (`my_model_a_b_rel`) on both sides, but swap the column names:
+
+    ```python
+    class MyModelA(models.Model):
+        _name = 'my.model.a'
+
+        my_model_b_ids = fields.Many2manyCustom(
+            'my.model.b',
+            'my_model_a_b_rel',
+            'my_model_a_id',
+            'my_model_b_id',
+            create_table=False,
+        )
+
+
+    class MyModelB(models.Model):
+        _name = 'my.model.b'
+
+        my_model_a_ids = fields.Many2manyCustom(
+            'my.model.a',
+            'my_model_a_b_rel',
+            'my_model_b_id',
+            'my_model_a_id',
+            create_table=False,
+        )
+    ```
+  </Step>
+
+  <Step title="Create the relational model">
+    Use the relational table name as the model's `_name`. Add indexed `Many2one` fields matching the column names declared above:
+
+    ```python
+    class MyModelABRel(models.Model):
+        _name = 'my.model.a.b.rel'
+
+        my_model_a_id = fields.Many2one(
+            'my.model.a',
+            required=True,
+            index=True,  # index is mandatory
+        )
+        my_model_b_id = fields.Many2one(
+            'my.model.b',
+            required=True,
+            index=True,  # index is mandatory
+        )
+    ```
+
+    <Warning>
+      Both foreign key fields must be indexed. Without indexes, Odoo's ORM will produce extremely slow queries when loading related records via the `Many2manyCustom` field.
+    </Warning>
+  </Step>
+
+  <Step title="Add a tree view for the relational model">
+    Because `my.model.a.b.rel` is a proper Odoo model, you can create a dedicated editable list view:
+
+    ```xml
+    <record id="my_model_a_b_rel_list_view" model="ir.ui.view">
+        <field name="name">my.model.a.b.rel.list.view</field>
+        <field name="model">my.model.a.b.rel</field>
+        <field name="arch" type="xml">
+            <list editable="top">
+                <field name="my_model_a_id"/>
+                <field name="my_model_b_id"/>
+            </list>
+        </field>
+    </record>
+    ```
+  </Step>
+</Steps>
+
+## When to use this
+
+- You need to add extra columns to the join table (e.g., a `sequence` or `note` field on each relationship row).
+- You need to apply `ir.model.access` rules at the row level of the many2many relationship.
+- You want to expose the relationship as a standalone list or tree view, separate from the parent form.
+- You need to `search()` or aggregate over the join table directly.
+
+<Tip>
+  If you only need a simple many2many without any of the above requirements, use the standard `Many2many` field. `Many2manyCustom` introduces additional model maintenance overhead.
+</Tip>
+
+## Module details
+
+| Field | Value |
+|---|---|
+| Technical name | `base_m2m_custom_field` |
+| Version | 18.0.1.0.0 |
+| License | AGPL-3 |
+| Depends on | `base` |

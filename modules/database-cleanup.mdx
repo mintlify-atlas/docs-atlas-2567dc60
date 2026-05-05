@@ -1,0 +1,81 @@
+---
+title: "Database Cleanup: remove orphaned schema remnants"
+description: "Scan and purge orphaned modules, models, fields, columns, tables, and ir.model.data entries left behind by uninstalled or upgraded Odoo modules."
+---
+
+The `database_cleanup` module (v18.0.1.0.2) helps administrators remove schema and metadata leftovers that accumulate after uninstalling modules or performing a major-version upgrade. Over time these orphaned artifacts — stale columns, ghost tables, dead `ir.model.data` rows — clutter the database and can interfere with future upgrades. This module provides a set of wizard-driven purge tools, each covering a different category of orphaned data, all accessible from a dedicated **Database Cleanup** menu under **Settings → Technical**.
+
+<Warning>
+This module is potentially destructive. Purging the wrong column, table, or data entry can silently corrupt your data in ways that are hard to recover from. Only use it if you fully understand the Odoo data model of every module that has ever been installed on the database. When in doubt, take a complete backup first and confirm each item individually rather than using the bulk **Purge All** action.
+</Warning>
+
+## Access control
+
+All purge wizards are restricted to members of the **ERP Manager** (`base.group_erp_manager`) group. Attempts to open a wizard by any other user raise an `AccessDenied` exception at the model level.
+
+## Purge categories
+
+The module exposes seven independent purge categories. Work through them **in the order listed** — modules first, then models, then fields, then columns, then tables, then data — because removing a module can make items in later categories disappear, reducing the risk of cascading errors.
+
+### Modules
+
+Finds `ir.module.module` records whose module directory no longer exists on disk (i.e. modules that were uninstalled but whose registry entry was never cleaned up). The wizard:
+
+1. Searches for installed modules without a corresponding path returned by `get_module_path`.
+2. Immediately uninstalls any modules still marked as `installed` or `to upgrade`.
+3. Unlinks the module records and any downstream dependencies.
+
+### Models
+
+Scans `ir.model` for model technical names that are no longer present in the Odoo registry (`self.env`). These are models whose Python class was removed when the defining module was uninstalled.
+
+### Fields
+
+Finds `ir.model.fields` entries that belong to a model still in the registry but whose field name is no longer defined on that model's Python class. This typically happens after a field is renamed or removed in a module upgrade.
+
+### Columns
+
+Identifies PostgreSQL columns that exist in a model's database table but have no corresponding Odoo field definition. The wizard queries `pg_attribute` and compares against the model's `_fields` dict, excluding computed non-stored fields, magic columns (`id`, `create_date`, etc.), and a hard-coded blacklist of columns known to exist outside the ORM (e.g. `res_users.password_crypt`, `res_users.totp_secret`).
+
+Each column is dropped with `ALTER TABLE … DROP COLUMN`. The transaction is committed after each individual drop to avoid ORM deadlocks.
+
+### Tables
+
+Finds PostgreSQL tables and views in the `public` schema that have no corresponding Odoo model and no known many2many relation table. Drops them with `DROP TABLE` or `DROP VIEW` after first removing any foreign-key constraints that reference the table from another table that is also being dropped in the same batch.
+
+### Data (`ir.model.data`)
+
+Scans `ir_model_data` for rows that either:
+
+- Reference a model name that is no longer in the registry, **or**
+- Have a `res_id` pointing to a record that no longer exists in the model's table.
+
+Purging these stale XML-ID entries prevents errors during future module upgrades that attempt to resolve those IDs.
+
+## Wizard workflow
+
+Every category follows the same interaction pattern:
+
+<Steps>
+  <Step title="Open the wizard">
+    Navigate to **Settings → Technical → Database Cleanup** and choose the category (e.g. **Purge Modules**). The wizard opens and immediately scans the database to populate its list of candidates. If nothing orphaned is found, a user error is shown.
+  </Step>
+  <Step title="Review the list">
+    The wizard displays all detected orphaned items. Inspect each entry carefully. You can deselect specific lines to exclude them from the purge.
+  </Step>
+  <Step title="Purge selectively or in bulk">
+    - To remove individual items, select the rows and click **Purge Selected**.
+    - To remove everything at once, click **Purge All**. Use this only when you are confident that every listed item is safe to remove.
+  </Step>
+  <Step title="Verify and move to the next category">
+    Purged lines are marked with a **Purged** flag. Close the wizard and proceed to the next category in the recommended order.
+  </Step>
+</Steps>
+
+<Tip>
+Run the **Modules** purge first. Removing stale module records often causes the Models, Fields, Columns, and Tables wizards to find fewer items on subsequent runs, which means fewer decisions to make and less risk of accidental data loss.
+</Tip>
+
+## Create Indexes
+
+The module also includes a **Create Indexes** utility (separate from the purge wizards) that lists missing indexes suggested by PostgreSQL's query planner. This is a read-only diagnostic view — it does not automatically create anything; you review the suggestions and decide which indexes to add.

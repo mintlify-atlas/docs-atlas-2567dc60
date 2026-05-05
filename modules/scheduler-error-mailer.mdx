@@ -1,0 +1,66 @@
+---
+title: "Scheduler Error Mailer: email alerts on cron failures"
+description: "Automatically send a configured email notification when a scheduled action (cron job) raises an exception, so failures are never silently lost."
+---
+
+The `scheduler_error_mailer` module extends Odoo's `ir.cron` model so that when a scheduled action raises an exception, an email is sent immediately using a configurable mail template. By default, every scheduled action is pre-configured with the bundled `Scheduler Error Mailer` template, which includes the error message and the database name.
+
+## How it works
+
+The module overrides `ir.cron._callback()`. When a cron job raises any exception, the override catches it, sends the configured email template via `template.send_mail(cron_id, force_send=True)`, and then re-raises the original exception so Odoo's standard error handling continues normally.
+
+The exception message is made available inside the template through the `job_exception` key in the rendering context, and the database name is available as `dbname`.
+
+```python
+# From models/ir_cron.py
+def _handle_callback_exception(self, cron_name, server_action_id, job_exception):
+    self.ensure_one()
+    if self.email_template_id:
+        context = {"job_exception": str(job_exception), "dbname": self._cr.dbname}
+        template = self.email_template_id.with_context(**context).sudo()
+        template.send_mail(self.id, force_send=True)
+```
+
+## Configuration
+
+<Steps>
+  <Step title="Open Scheduled Actions">
+    Go to **Settings → Technical → Automation → Scheduled Actions**.
+  </Step>
+
+  <Step title="Select a scheduled action">
+    Open the scheduled action you want to monitor.
+  </Step>
+
+  <Step title="Set the error email template">
+    In the **Error E-mail Template** field, select the template to use when this action fails.
+
+    The module ships a default template (`scheduler_error_mailer.scheduler_error_mailer`) that is pre-assigned to all scheduled actions via the `post_init_hook`. You can use this template as-is, duplicate it, or create a new `mail.template` targeting the `ir.cron` model.
+
+    <Note>
+      The **Error E-mail Template** field is restricted to templates whose `model_id.model` equals `ir.cron`. Custom templates must target this model to appear in the dropdown.
+    </Note>
+  </Step>
+
+  <Step title="Save">
+    Save the scheduled action. The next time it fails, an email will be sent using the configured template.
+  </Step>
+</Steps>
+
+## The `ir.cron` field added by this module
+
+| Field | Type | Description |
+|---|---|---|
+| `email_template_id` | `Many2one` → `mail.template` | The mail template sent when this cron raises an exception. Defaults to the bundled `Scheduler Error Mailer` template. Only templates targeting the `ir.cron` model are shown. |
+
+## Writing a custom error template
+
+Create a `mail.template` record with `model_id` pointing to `ir.cron`. Inside the template body you can use:
+
+- `{{ object.name }}` — the name of the failed scheduled action
+- `{{ context.get('job_exception') }}` — the string representation of the exception
+- `{{ context.get('dbname') }}` — the name of the database where the failure occurred
+
+<Tip>
+  The module includes a test helper method `ir.cron._test_scheduler_failure()` that deliberately raises a `UserError`. You can call it from a debug scheduled action to verify your template renders and sends correctly without waiting for a real failure.
+</Tip>

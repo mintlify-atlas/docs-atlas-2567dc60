@@ -1,0 +1,236 @@
+---
+title: "Excel Import/Export: build Excel flows for Odoo"
+description: "Developer base module for building Excel import, export, and report workflows in Odoo using template-driven configurations and reusable wizard infrastructure."
+---
+
+The `excel_import_export` module is a developer toolkit for building Excel-based data flows in Odoo. Rather than writing low-level spreadsheet code, you design an Excel template file using a standard application, define an instruction dictionary that maps Odoo fields to cell positions, and the module handles the rest. It supports three workflow types: exporting records to Excel, importing data from Excel into Odoo records, and generating parameterized Excel reports.
+
+The module requires the `openpyxl` Python library and depends only on `mail`.
+
+## Core architecture
+
+The module is built around three abstract/transient models and one master data model.
+
+### `xlsx.template` — master template record
+
+`xlsx.template` (`models/xlsx_template.py`) stores everything needed to drive an import, export, or report operation:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | Char | Template name |
+| `res_model` | Char | The Odoo model this template applies to |
+| `fname` | Char | File name of the Excel template attachment |
+| `datas` | Binary | The `.xlsx` template file |
+| `input_instruction` | Text | Python dictionary (as text) describing field-to-cell mapping |
+| `instruction` | Text (computed) | Normalized instruction dict computed from `export_ids` and `import_ids` |
+| `export_ids` | One2many (`xlsx.template.export`) | Structured export mapping rows |
+| `import_ids` | One2many (`xlsx.template.import`) | Structured import mapping rows |
+| `post_import_hook` | Char | Mako expression called after a successful import, e.g. `${object.post_import_do_something()}` |
+| `to_csv` | Boolean | Convert the exported file to CSV instead of `.xlsx` |
+| `use_report_wizard` | Boolean | Use the common report wizard model instead of a custom transient model |
+| `result_model_id` | Many2one (`ir.model`) | For easy reporting: the model whose records populate the report |
+| `redirect_action` | Many2one (`ir.actions.act_window`) | Optional action to redirect to after import completes |
+
+### `xlsx.export` — export engine
+
+`xlsx.export` (`models/xlsx_export.py`) is an abstract model that provides `export_xlsx()`. Call it from any wizard or server action:
+
+```python
+out_file, out_name = self.env["xlsx.export"].export_xlsx(
+    template,      # xlsx.template record
+    res_model,     # str, e.g. "sale.order"
+    res_ids,       # list of int record IDs
+)
+```
+
+The method loads the `.xlsx` template binary, iterates over the selected records, fills cell values according to the instruction dict, and returns a base64-encoded file. If multiple record IDs are provided, the result is a `.zip` archive of individual files.
+
+### `xlsx.import` — import engine
+
+`xlsx.import` (`models/xlsx_import.py`) is an abstract model that provides `import_xlsx()`. Call it from a wizard after the user uploads an Excel file:
+
+```python
+record = self.env["xlsx.import"].import_xlsx(
+    import_file,   # base64-encoded file content
+    template,      # xlsx.template record
+    res_model,     # str, e.g. "sale.order"
+    res_id,        # int record ID, or False to create new
+)
+```
+
+The method parses the uploaded file using `openpyxl` (or `xlrd` for older `.xls` files), maps cell values back to Odoo fields according to `__IMPORT__` in the instruction dict, and uses Odoo's standard `base_import` mechanism to write the data. Existing line records are deleted before import unless the row is marked `_NODEL_` in the instruction.
+
+## Instruction dictionary format
+
+The `input_instruction` field accepts a Python dictionary literal. The top-level keys `__EXPORT__`, `__IMPORT__`, and `__POST_IMPORT__` control the three phases.
+
+```python
+{
+    "__EXPORT__": {
+        1: {                          # Sheet index (1-based) or sheet name string
+            "_HEAD_": {               # Header fields (single values from the record)
+                "A1": "name",
+                "B1": "partner_id.name",
+            },
+            "order_line": {           # One2many field name; rows are iterated
+                "A10": "product_id.name",
+                "B10": "product_uom_qty",
+                "C10": "price_unit",
+            },
+        }
+    },
+    "__IMPORT__": {
+        1: {
+            "_HEAD_": {
+                "A1": "name",
+            },
+            "order_line": {
+                "A10": "product_id/id",   # Use external ID for relational fields
+                "B10": "product_uom_qty",
+            },
+        }
+    },
+    "__POST_IMPORT__": "${object.action_confirm()}",
+}
+```
+
+<Tip>
+  Prefix a row field name with `_CONT_` to continue writing rows after the previous section ends (useful for multiple line groups on the same sheet). Use `_EXTEND_` to insert blank rows to preserve footer formulas in the template.
+</Tip>
+
+## Developer use cases
+
+### Use case 1: export/import actions on an existing document
+
+Add export and import actions to an existing model's action menu.
+
+<Steps>
+  <Step title="Create the action menu entries">
+    In your module's `actions.xml`, add `ir.actions.act_window` records with `res_model="export.xlsx.wizard"` (or `import.xlsx.wizard`) and `src_model` set to your document model. Pass `template_domain` in the context to locate the right template.
+
+    ```xml
+    <record id="action_export_sale_order_excel" model="ir.actions.act_window">
+        <field name="name">Export Excel</field>
+        <field name="res_model">export.xlsx.wizard</field>
+        <field name="src_model">sale.order</field>
+        <field name="binding_model_id" ref="sale.model_sale_order"/>
+        <field name="binding_type">action</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="context">{
+            "template_domain": [("res_model", "=", "sale.order")]
+        }</field>
+    </record>
+    ```
+  </Step>
+  <Step title="Design the Excel template">
+    Create an `.xlsx` file with your layout. Name the worksheet tab that will hold the data.
+  </Step>
+  <Step title="Create the xlsx.template record">
+    In `templates.xml`, create an `xlsx.template` record referencing the model, the template file name, and the instruction dictionary.
+  </Step>
+</Steps>
+
+### Use case 2: stand-alone import wizard
+
+Create a menu entry for importing files to create new records.
+
+```xml
+<record id="action_import_sale_orders" model="ir.actions.act_window">
+    <field name="name">Import Sale Orders</field>
+    <field name="res_model">import.xlsx.wizard</field>
+    <field name="view_mode">form</field>
+    <field name="target">new</field>
+    <field name="context">{
+        "template_domain": [("res_model", "=", "sale.order"), ("fname", "=", "sale_order_import.xlsx")]
+    }</field>
+</record>
+```
+
+### Use case 3: Excel report via report action
+
+Use `report_type="excel"` on an `ir.actions.report` to bind a report to a model. Odoo uses the combination of `report_name` and the active record to locate the template and run `export_xlsx`.
+
+```xml
+<record id="action_report_saleorder_excel" model="ir.actions.report">
+    <field name="name">Quotation / Order (.xlsx)</field>
+    <field name="model">sale.order</field>
+    <field name="report_name">sale.order</field>
+    <field name="report_file">sale.order</field>
+    <field name="binding_model_id" ref="sale.model_sale_order"/>
+    <field name="binding_type">report</field>
+    <field name="report_type">excel</field>
+</record>
+```
+
+### Use case 4: easy reporting (no-code)
+
+For reports that only need to query a model and export the results, use the **Easy Reporting** option in the template UI.
+
+<Steps>
+  <Step title="Create an xlsx.template with Easy Reporting enabled">
+    Go to **Settings > Technical > Excel Import/Export > XLSX Templates**, create a new template, and enable **Easy Reporting**. Select the **Report Model** whose records will populate the report.
+  </Step>
+  <Step title="Upload the Excel template file">
+    Upload your `.xlsx` template. The system creates sample export lines automatically. Add or edit field mappings as needed.
+  </Step>
+  <Step title="Add a report menu">
+    Click **Add Report Menu**. This creates an `ir.actions.report` with `report_type="excel"` and an `ir.ui.menu` entry, wired to a common criteria wizard.
+  </Step>
+</Steps>
+
+## Field expression syntax
+
+Export fields support inline expressions for conditional values and styling. Conditions use `${...}` syntax and style hints use `#{...}`:
+
+| Syntax | Meaning |
+|---|---|
+| `partner_id.name` | Dot-traversal across relations |
+| `amount_total\${value and value or 0.0}` | Python expression evaluated with `value` as the cell value |
+| `amount_total\#{style_red}` | Apply named style `style_red` to the cell |
+| `amount_total@{sum}` | Add a SUM formula in the footer row for this column |
+
+<CodeGroup>
+
+```python export instruction
+{
+    "__EXPORT__": {
+        1: {
+            "_HEAD_": {
+                "A1": "name",
+                "B1": "date_order",
+            },
+            "order_line": {
+                "A5": "product_id.name",
+                "B5": "product_uom_qty",
+                "C5": "price_unit",
+                "D5": "price_subtotal@{sum}",
+            },
+        }
+    }
+}
+```
+
+```python import instruction
+{
+    "__IMPORT__": {
+        1: {
+            "_HEAD_": {
+                "A1": "name",
+            },
+            "order_line": {
+                "A5": "product_id/id",
+                "B5": "product_uom_qty",
+                "C5": "price_unit",
+            },
+        }
+    },
+    "__POST_IMPORT__": "${object.action_confirm()}"
+}
+```
+
+</CodeGroup>
+
+<Note>
+  The module ships with a companion demo module, `excel_import_export_demo`, which contains complete working examples of all four use cases above. Install it to explore a reference implementation.
+</Note>
